@@ -1,0 +1,6 @@
+{
+  "name": "ABSU LodgeSafe",
+  "description": "Official Abia State University (ABSU) SUG-supervised student accommodation marketplace with physical inspection protection and conditional payment settlement.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

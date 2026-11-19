@@ -1,0 +1,384 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Reusable Security Primitives
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isVerifiedUser() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'absuconnect.team@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Entity Validation Blueprints
+    function isValidProfile(data) {
+      return data.keys().hasAll(['uid', 'fullName', 'email', 'role', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'fullName', 'email', 'phone', 'role', 'matricNumber', 'department', 'faculty', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.role in ['student', 'agent', 'sug_admin', 'sug_president', 'tech_manager']
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
+        && (!('matricNumber' in data) || (data.matricNumber is string && data.matricNumber.size() <= 40))
+        && (!('department' in data) || (data.department is string && data.department.size() <= 100))
+        && (!('faculty' in data) || (data.faculty is string && data.faculty.size() <= 100))
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidAgent(data) {
+      return data.keys().hasAll(['agentId', 'ownerUid', 'fullName', 'email', 'status', 'createdAt'])
+        && data.keys().hasOnly(['agentId', 'ownerUid', 'fullName', 'phone', 'email', 'absuId', 'idDocumentName', 'bankName', 'accountNumber', 'accountName', 'emergencyContact', 'experienceYears', 'status', 'rating', 'createdAt', 'updatedAt'])
+        && isValidId(data.agentId)
+        && isValidId(data.ownerUid)
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
+        && data.email is string && data.email.size() <= 160
+        && data.status in ['Pending Approval', 'Approved', 'Rejected', 'Suspended', 'Banned']
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
+        && (!('absuId' in data) || (data.absuId is string && data.absuId.size() <= 40))
+        && (!('idDocumentName' in data) || (data.idDocumentName is string && data.idDocumentName.size() <= 160))
+        && (!('bankName' in data) || (data.bankName is string && data.bankName.size() <= 80))
+        && (!('accountNumber' in data) || (data.accountNumber is string && data.accountNumber.size() <= 20))
+        && (!('accountName' in data) || (data.accountName is string && data.accountName.size() <= 120))
+        && (!('emergencyContact' in data) || (data.emergencyContact is string && data.emergencyContact.size() <= 120))
+        && (!('experienceYears' in data) || (data.experienceYears is number && data.experienceYears >= 0 && data.experienceYears <= 60))
+        && (!('rating' in data) || (data.rating is number && data.rating >= 0 && data.rating <= 5))
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidProperty(data) {
+      return data.keys().hasAll(['propertyId', 'agentUid', 'title', 'category', 'locationArea', 'yearlyRentKobo', 'agentCommissionKobo', 'inspectionFeeKobo', 'availabilityStatus', 'verificationStatus', 'createdAt'])
+        && data.keys().hasOnly(['propertyId', 'agentUid', 'agentName', 'title', 'category', 'locationArea', 'preciseAddress', 'yearlyRentKobo', 'agentCommissionKobo', 'inspectionFeeKobo', 'availableRooms', 'availabilityStatus', 'verificationStatus', 'coverImageUrl', 'description', 'amenities', 'lastConfirmedAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.propertyId)
+        && isValidId(data.agentUid)
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 160
+        && data.category in ['Self-Contain', 'Single Room', 'Two-Bedroom', 'Apartment', 'Shared Hostel']
+        && data.locationArea in ['School Gate', 'Back Gate', 'Inside School', 'Uturu Main Town', 'Eke-Okigwe Axis']
+        && data.yearlyRentKobo is int && data.yearlyRentKobo > 0
+        && data.agentCommissionKobo is int && data.agentCommissionKobo >= 0
+        && data.inspectionFeeKobo is int && data.inspectionFeeKobo == 300000
+        && data.availabilityStatus in ['Available', 'Unavailable']
+        && data.verificationStatus in ['Pending Verification', 'SUG Verified', 'Rejected', 'Suspended']
+        && (!('agentName' in data) || (data.agentName is string && data.agentName.size() <= 120))
+        && (!('preciseAddress' in data) || (data.preciseAddress is string && data.preciseAddress.size() <= 240))
+        && (!('availableRooms' in data) || (data.availableRooms is int && data.availableRooms >= 0 && data.availableRooms <= 500))
+        && (!('coverImageUrl' in data) || (data.coverImageUrl is string && data.coverImageUrl.size() <= 400))
+        && (!('description' in data) || (data.description is string && data.description.size() <= 2000))
+        && (!('amenities' in data) || (data.amenities is list && data.amenities.size() <= 12 && (data.amenities.size() == 0 || data.amenities[0] is string)))
+        && data.createdAt is timestamp
+        && (!('lastConfirmedAt' in data) || data.lastConfirmedAt is timestamp)
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidBooking(data) {
+      return data.keys().hasAll(['bookingId', 'bookingReference', 'studentUid', 'agentUid', 'propertyId', 'yearlyRentKobo', 'agentCommissionKobo', 'inspectionFeeKobo', 'totalPayableKobo', 'status', 'createdAt'])
+        && data.keys().hasOnly(['bookingId', 'bookingReference', 'studentUid', 'agentUid', 'propertyId', 'propertyTitle', 'yearlyRentKobo', 'agentCommissionKobo', 'inspectionFeeKobo', 'totalPayableKobo', 'platformSharePct', 'agentSharePct', 'platformCommissionKobo', 'agentEarningsKobo', 'sugAllocationKobo', 'techManagerAllocationKobo', 'status', 'inspectionDate', 'createdAt', 'updatedAt'])
+        && isValidId(data.bookingId)
+        && data.bookingReference is string && data.bookingReference.size() >= 6 && data.bookingReference.size() <= 64
+        && isValidId(data.studentUid)
+        && isValidId(data.agentUid)
+        && isValidId(data.propertyId)
+        && (!('propertyTitle' in data) || (data.propertyTitle is string && data.propertyTitle.size() <= 160))
+        && data.yearlyRentKobo is int && data.yearlyRentKobo > 0
+        && data.agentCommissionKobo is int && data.agentCommissionKobo >= 0
+        && data.inspectionFeeKobo is int && data.inspectionFeeKobo == 300000
+        && data.totalPayableKobo is int && data.totalPayableKobo == (data.yearlyRentKobo + data.agentCommissionKobo + data.inspectionFeeKobo)
+        && data.status in ['Pending Payment', 'Payment Failed', 'Payment Successful', 'Awaiting Inspection', 'Inspection Scheduled', 'Dispute Requested', 'Under SUG Review', 'Refund Approved', 'Refund Processing', 'Refunded', 'Confirmed', 'Settlement Processing', 'Settled', 'Cancelled']
+        && (!('inspectionDate' in data) || (data.inspectionDate is string && data.inspectionDate.size() <= 40))
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidDispute(data) {
+      return data.keys().hasAll(['disputeId', 'bookingId', 'studentUid', 'agentUid', 'reason', 'description', 'status', 'createdAt'])
+        && data.keys().hasOnly(['disputeId', 'bookingId', 'bookingReference', 'studentUid', 'agentUid', 'reason', 'description', 'status', 'resolutionNote', 'createdAt', 'updatedAt'])
+        && isValidId(data.disputeId)
+        && isValidId(data.bookingId)
+        && isValidId(data.studentUid)
+        && isValidId(data.agentUid)
+        && data.reason is string && data.reason.size() >= 3 && data.reason.size() <= 160
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 2000
+        && data.status in ['Dispute Requested', 'Under SUG Review', 'Refund Approved', 'Refund Rejected', 'Escalated', 'Closed']
+        && (!('bookingReference' in data) || (data.bookingReference is string && data.bookingReference.size() <= 64))
+        && (!('resolutionNote' in data) || (data.resolutionNote is string && data.resolutionNote.size() <= 1000))
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['notificationId', 'recipientUid', 'title', 'message', 'read', 'createdAt'])
+        && data.keys().hasOnly(['notificationId', 'recipientUid', 'title', 'message', 'channel', 'read', 'createdAt'])
+        && isValidId(data.notificationId)
+        && isValidId(data.recipientUid)
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 160
+        && data.message is string && data.message.size() > 0 && data.message.size() <= 600
+        && data.read is bool
+        && (!('channel' in data) || data.channel in ['in_app', 'email'])
+        && data.createdAt is timestamp;
+    }
+
+    function isValidPlatformSetting(data) {
+      return data.keys().hasAll(['settingKey', 'inspectionFeeKobo', 'platformSharePct', 'agentSharePct', 'sugPlatformSharePct', 'techManagerPlatformSharePct', 'paymentMode'])
+        && data.keys().hasOnly(['settingKey', 'inspectionFeeKobo', 'platformSharePct', 'agentSharePct', 'sugPlatformSharePct', 'techManagerPlatformSharePct', 'maxCommissionPctOfRent', 'paymentMode', 'updatedAt'])
+        && data.settingKey is string && data.settingKey.size() <= 64
+        && data.inspectionFeeKobo is int && data.inspectionFeeKobo >= 0
+        && data.platformSharePct is number && data.agentSharePct is number
+        && (data.platformSharePct + data.agentSharePct) == 100
+        && data.sugPlatformSharePct is number && data.techManagerPlatformSharePct is number
+        && (data.sugPlatformSharePct + data.techManagerPlatformSharePct) == 100
+        && data.paymentMode in ['test_disabled']
+        && (!('maxCommissionPctOfRent' in data) || data.maxCommissionPctOfRent is number)
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['logId', 'actorUid', 'action', 'summary', 'createdAt'])
+        && data.keys().hasOnly(['logId', 'actorUid', 'actorRole', 'action', 'targetType', 'targetId', 'summary', 'createdAt'])
+        && isValidId(data.logId)
+        && isValidId(data.actorUid)
+        && data.action is string && data.action.size() <= 120
+        && data.summary is string && data.summary.size() <= 500
+        && (!('actorRole' in data) || (data.actorRole is string && data.actorRole.size() <= 40))
+        && (!('targetType' in data) || (data.targetType is string && data.targetType.size() <= 60))
+        && (!('targetId' in data) || (data.targetId is string && data.targetId.size() <= 128))
+        && data.createdAt is timestamp;
+    }
+
+    // Connection validation probe collection
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // 1. User Profiles (PII Isolated to Owner or Admin)
+    match /profiles/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidProfile(incoming())
+        && incoming().uid == userId
+        && incoming().role in ['student', 'agent']
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(userId)
+        && isValidProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId)
+            && incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'matricNumber', 'department', 'faculty', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    // 2. SUG Admin Directory
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // 3. Agents (Owner or Admin only)
+    match /agents/{agentId} {
+      allow get: if isValidId(agentId) && (isOwner(existing().ownerUid) || isAdmin());
+      allow list: if isAdmin() || (isVerifiedUser() && resource.data.ownerUid == request.auth.uid);
+      allow create: if isValidId(agentId)
+        && isVerifiedUser()
+        && isValidAgent(incoming())
+        && incoming().agentId == agentId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().status == 'Pending Approval'
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(agentId)
+        && isValidAgent(incoming())
+        && incoming().agentId == existing().agentId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && incoming().status == existing().status
+            && incoming().diff(existing()).affectedKeys().hasOnly(['phone', 'bankName', 'accountNumber', 'accountName', 'emergencyContact', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    // 4. Properties (Publicly browsable only when SUG Verified)
+    match /properties/{propertyId} {
+      allow get: if isValidId(propertyId) && (
+        existing().verificationStatus == 'SUG Verified' ||
+        isAdmin() ||
+        (isVerifiedUser() && existing().agentUid == request.auth.uid)
+      );
+      allow list: if resource.data.verificationStatus == 'SUG Verified'
+        || isAdmin()
+        || (isVerifiedUser() && resource.data.agentUid == request.auth.uid);
+      allow create: if isValidId(propertyId)
+        && isVerifiedUser()
+        && isValidProperty(incoming())
+        && incoming().propertyId == propertyId
+        && incoming().agentUid == request.auth.uid
+        && incoming().verificationStatus == 'Pending Verification'
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(propertyId)
+        && isValidProperty(incoming())
+        && incoming().propertyId == existing().propertyId
+        && incoming().agentUid == existing().agentUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().agentUid)
+            && incoming().verificationStatus == existing().verificationStatus
+            && incoming().inspectionFeeKobo == existing().inspectionFeeKobo
+            && incoming().diff(existing()).affectedKeys().hasOnly(['availableRooms', 'availabilityStatus', 'lastConfirmedAt', 'description', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin();
+    }
+
+    // 5. Bookings (Strict student/agent/admin isolation + terminal state locking)
+    match /bookings/{bookingId} {
+      allow get: if isValidId(bookingId) && (
+        isAdmin() ||
+        (isVerifiedUser() && (existing().studentUid == request.auth.uid || existing().agentUid == request.auth.uid))
+      );
+      allow list: if isAdmin()
+        || (isVerifiedUser() && resource.data.studentUid == request.auth.uid)
+        || (isVerifiedUser() && resource.data.agentUid == request.auth.uid);
+      allow create: if isValidId(bookingId)
+        && isVerifiedUser()
+        && isValidBooking(incoming())
+        && incoming().bookingId == bookingId
+        && incoming().studentUid == request.auth.uid
+        && exists(/databases/$(database)/documents/properties/$(incoming().propertyId))
+        && incoming().status in ['Pending Payment', 'Awaiting Inspection']
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(bookingId)
+        && isValidBooking(incoming())
+        && incoming().bookingId == existing().bookingId
+        && incoming().studentUid == existing().studentUid
+        && incoming().agentUid == existing().agentUid
+        && incoming().propertyId == existing().propertyId
+        && incoming().yearlyRentKobo == existing().yearlyRentKobo
+        && incoming().agentCommissionKobo == existing().agentCommissionKobo
+        && incoming().inspectionFeeKobo == existing().inspectionFeeKobo
+        && incoming().totalPayableKobo == existing().totalPayableKobo
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && !(existing().status in ['Settled', 'Refunded', 'Cancelled'])
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().studentUid)
+            && existing().status in ['Awaiting Inspection', 'Inspection Scheduled']
+            && incoming().status in ['Confirmed', 'Dispute Requested']
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    // 6. Disputes
+    match /disputes/{disputeId} {
+      allow get: if isValidId(disputeId) && (
+        isAdmin() ||
+        (isVerifiedUser() && (existing().studentUid == request.auth.uid || existing().agentUid == request.auth.uid))
+      );
+      allow list: if isAdmin()
+        || (isVerifiedUser() && resource.data.studentUid == request.auth.uid)
+        || (isVerifiedUser() && resource.data.agentUid == request.auth.uid);
+      allow create: if isValidId(disputeId)
+        && isVerifiedUser()
+        && isValidDispute(incoming())
+        && incoming().disputeId == disputeId
+        && incoming().studentUid == request.auth.uid
+        && exists(/databases/$(database)/documents/bookings/$(incoming().bookingId))
+        && incoming().status == 'Dispute Requested'
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(disputeId)
+        && isValidDispute(incoming())
+        && incoming().disputeId == existing().disputeId
+        && incoming().bookingId == existing().bookingId
+        && incoming().studentUid == existing().studentUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && isAdmin();
+      allow delete: if false;
+    }
+
+    // 7. Notifications
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) && (isAdmin() || (isVerifiedUser() && existing().recipientUid == request.auth.uid));
+      allow list: if isAdmin() || (isVerifiedUser() && resource.data.recipientUid == request.auth.uid);
+      allow create: if isValidId(notificationId)
+        && isVerifiedUser()
+        && isValidNotification(incoming())
+        && incoming().notificationId == notificationId
+        && (isAdmin() || incoming().recipientUid == request.auth.uid)
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(notificationId)
+        && isValidNotification(incoming())
+        && isOwner(existing().recipientUid)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['read']);
+      allow delete: if false;
+    }
+
+    // 8. Platform Settings
+    match /platform_settings/{settingKey} {
+      allow get: if isValidId(settingKey);
+      allow list: if false;
+      allow create, update: if isValidId(settingKey) && isAdmin() && isValidPlatformSetting(incoming());
+      allow delete: if false;
+    }
+
+    // 9. Audit Logs (Immutable)
+    match /audit_logs/{logId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(logId)
+        && isVerifiedUser()
+        && isValidAuditLog(incoming())
+        && incoming().logId == logId
+        && incoming().actorUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}

@@ -1,0 +1,224 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated platform user profile across student, agent, SUG admin, SUG president, and technical manager roles.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "role": { "type": "string", "enum": ["student", "agent", "sug_admin", "sug_president", "tech_manager"] },
+        "matricNumber": { "type": "string", "maxLength": 40 },
+        "department": { "type": "string", "maxLength": 100 },
+        "faculty": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "fullName", "email", "role", "createdAt"]
+    },
+    "AgentProfile": {
+      "title": "AgentProfile",
+      "description": "Accommodation agent verification, bank settlement info, and approval status.",
+      "type": "object",
+      "properties": {
+        "agentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "absuId": { "type": "string", "maxLength": 40 },
+        "idDocumentName": { "type": "string", "maxLength": 160 },
+        "bankName": { "type": "string", "maxLength": 80 },
+        "accountNumber": { "type": "string", "maxLength": 20 },
+        "accountName": { "type": "string", "maxLength": 120 },
+        "emergencyContact": { "type": "string", "maxLength": 120 },
+        "experienceYears": { "type": "number" },
+        "status": { "type": "string", "enum": ["Pending Approval", "Approved", "Rejected", "Suspended", "Banned"] },
+        "rating": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["agentId", "ownerUid", "fullName", "email", "status", "createdAt"]
+    },
+    "PropertyListing": {
+      "title": "PropertyListing",
+      "description": "Student lodge listing with rent, agent commission, verification status, and availability.",
+      "type": "object",
+      "properties": {
+        "propertyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "agentUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "agentName": { "type": "string", "maxLength": 120 },
+        "title": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "category": { "type": "string", "enum": ["Self-Contain", "Single Room", "Two-Bedroom", "Apartment", "Shared Hostel"] },
+        "locationArea": { "type": "string", "enum": ["School Gate", "Back Gate", "Inside School", "Uturu Main Town", "Eke-Okigwe Axis"] },
+        "preciseAddress": { "type": "string", "maxLength": 240 },
+        "yearlyRentKobo": { "type": "integer" },
+        "agentCommissionKobo": { "type": "integer" },
+        "inspectionFeeKobo": { "type": "integer" },
+        "availableRooms": { "type": "integer" },
+        "availabilityStatus": { "type": "string", "enum": ["Available", "Unavailable"] },
+        "verificationStatus": { "type": "string", "enum": ["Pending Verification", "SUG Verified", "Rejected", "Suspended"] },
+        "coverImageUrl": { "type": "string", "maxLength": 400 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "amenities": { "type": "array" },
+        "lastConfirmedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["propertyId", "agentUid", "title", "category", "locationArea", "yearlyRentKobo", "agentCommissionKobo", "inspectionFeeKobo", "availabilityStatus", "verificationStatus", "createdAt"]
+    },
+    "BookingRecord": {
+      "title": "BookingRecord",
+      "description": "Student booking with immutable snapshot of kobo pricing breakdown and inspection workflow state.",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "bookingReference": { "type": "string", "maxLength": 64 },
+        "studentUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "agentUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "propertyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "propertyTitle": { "type": "string", "maxLength": 160 },
+        "yearlyRentKobo": { "type": "integer" },
+        "agentCommissionKobo": { "type": "integer" },
+        "inspectionFeeKobo": { "type": "integer" },
+        "totalPayableKobo": { "type": "integer" },
+        "platformSharePct": { "type": "number" },
+        "agentSharePct": { "type": "number" },
+        "platformCommissionKobo": { "type": "integer" },
+        "agentEarningsKobo": { "type": "integer" },
+        "sugAllocationKobo": { "type": "integer" },
+        "techManagerAllocationKobo": { "type": "integer" },
+        "status": {
+          "type": "string",
+          "enum": [
+            "Pending Payment",
+            "Payment Failed",
+            "Payment Successful",
+            "Awaiting Inspection",
+            "Inspection Scheduled",
+            "Dispute Requested",
+            "Under SUG Review",
+            "Refund Approved",
+            "Refund Processing",
+            "Refunded",
+            "Confirmed",
+            "Settlement Processing",
+            "Settled",
+            "Cancelled"
+          ]
+        },
+        "inspectionDate": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "bookingReference", "studentUid", "agentUid", "propertyId", "totalPayableKobo", "status", "createdAt"]
+    },
+    "DisputeCase": {
+      "title": "DisputeCase",
+      "description": "Student refund dispute submitted for SUG accommodation administrator review.",
+      "type": "object",
+      "properties": {
+        "disputeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "bookingId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "bookingReference": { "type": "string", "maxLength": 64 },
+        "studentUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "agentUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reason": { "type": "string", "maxLength": 160 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "status": { "type": "string", "enum": ["Dispute Requested", "Under SUG Review", "Refund Approved", "Refund Rejected", "Escalated", "Closed"] },
+        "resolutionNote": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["disputeId", "bookingId", "studentUid", "agentUid", "reason", "description", "status", "createdAt"]
+    },
+    "NotificationItem": {
+      "title": "NotificationItem",
+      "description": "In-app notification targeted to a specific user UID.",
+      "type": "object",
+      "properties": {
+        "notificationId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "recipientUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 160 },
+        "message": { "type": "string", "maxLength": 600 },
+        "channel": { "type": "string", "enum": ["in_app", "email"] },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["notificationId", "recipientUid", "title", "message", "read", "createdAt"]
+    },
+    "PlatformSetting": {
+      "title": "PlatformSetting",
+      "description": "SUG-approved commission shares, inspection fee kobo, and payment mode settings.",
+      "type": "object",
+      "properties": {
+        "settingKey": { "type": "string", "maxLength": 64 },
+        "inspectionFeeKobo": { "type": "integer" },
+        "platformSharePct": { "type": "number" },
+        "agentSharePct": { "type": "number" },
+        "sugPlatformSharePct": { "type": "number" },
+        "techManagerPlatformSharePct": { "type": "number" },
+        "maxCommissionPctOfRent": { "type": "number" },
+        "paymentMode": { "type": "string", "enum": ["test_disabled"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["settingKey", "inspectionFeeKobo", "platformSharePct", "agentSharePct", "sugPlatformSharePct", "techManagerPlatformSharePct", "paymentMode"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable operational and financial audit log entry.",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorRole": { "type": "string", "maxLength": 40 },
+        "action": { "type": "string", "maxLength": 120 },
+        "targetType": { "type": "string", "maxLength": 60 },
+        "targetId": { "type": "string", "maxLength": 128 },
+        "summary": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["logId", "actorUid", "action", "summary", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/profiles/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user account profile containing student matriculation/PII and assigned role."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Authorized SUG President and SUG Accommodation Administrator directory."
+    },
+    "/agents/{agentId}": {
+      "schema": { "$ref": "#/entities/AgentProfile" },
+      "description": "Agent KYC registration records and payout bank metadata."
+    },
+    "/properties/{propertyId}": {
+      "schema": { "$ref": "#/entities/PropertyListing" },
+      "description": "Lodge listings published after SUG verification."
+    },
+    "/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/BookingRecord" },
+      "description": "Student bookings and conditional settlement ledger snapshots."
+    },
+    "/disputes/{disputeId}": {
+      "schema": { "$ref": "#/entities/DisputeCase" },
+      "description": "Inspection disputes and refund requests reviewed by SUG."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationItem" },
+      "description": "Role-scoped in-app notifications."
+    },
+    "/platform_settings/{settingKey}": {
+      "schema": { "$ref": "#/entities/PlatformSetting" },
+      "description": "Global platform financial parameters approved by SUG."
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable financial and administrative audit trail."
+    }
+  }
+}
