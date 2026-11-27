@@ -1,41 +1,59 @@
 import React, { useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   Bell,
   Building2,
-  Calendar,
   CheckCircle2,
-  ClipboardList,
+  Clock,
   DollarSign,
   Film,
-  HelpCircle,
   ImagePlus,
-  LayoutDashboard,
   LogOut,
+  MessageCircle,
   PhoneCall,
   PlusCircle,
+  RefreshCw,
   Upload,
   User,
-  Wallet,
   X,
 } from 'lucide-react';
 import { useMarketplace } from '../context/MarketplaceContext';
 import { formatNairaFromKobo } from '../domain/finance';
 import { getUnreadNotificationsCount } from '../domain/notifications';
-import { LocationArea, PropertyCategory } from '../domain/types';
-import { validateMediaUpload } from '../domain/validation';
-import { NotificationsPanel } from './NotificationsPanel';
+import {
+  ALLOWED_AGENT_FEES_NAIRA,
+  LocationArea,
+  LodgeStatus,
+  PropertyCategory,
+} from '../domain/types';
+import {
+  buildAgentWhatsAppLink,
+  detectSuspiciousListingDescription,
+  validateMediaUpload,
+} from '../domain/validation';
+import { isCloudinaryConfigured, uploadFileToCloudinary } from '../lib/cloudinary';
 
-type AgentSection =
-  | 'overview'
-  | 'lodges'
-  | 'add-lodge'
-  | 'inspections'
-  | 'bookings'
-  | 'earnings'
-  | 'payouts'
-  | 'notifications'
-  | 'profile'
-  | 'support';
+type AgentTab = 'lodges' | 'alerts' | 'earnings' | 'profile';
+
+interface UploadedMediaDraft {
+  type: 'image' | 'video';
+  name: string;
+  previewUrl?: string;
+  cloudinaryPublicId?: string;
+  sizeBytes: number;
+  status: 'uploading' | 'ready' | 'failed';
+  error?: string;
+  rawFile?: File;
+}
+
+const LOCATION_OPTIONS: LocationArea[] = ['Uturu', 'School Gate', 'ABSU Gate', 'Okigwe Road'];
+const ROOM_TYPE_OPTIONS: PropertyCategory[] = [
+  'Self Contain',
+  'Single Room',
+  '2 Bedroom',
+  '3 Bedroom',
+  'Face Me I Face You',
+];
 
 export function AgentDashboard() {
   const {
@@ -43,47 +61,49 @@ export function AgentDashboard() {
     agents,
     properties,
     bookings,
+    settlements,
     notifications,
-    settings,
     setActivePage,
-    openPropertyDetails,
     submitNewLodge,
     toggleLodgeAvailability,
     logoutUser,
     showToast,
   } = useMarketplace();
 
-  const [section, setSection] = useState<AgentSection>('overview');
+  const [tab, setTab] = useState<AgentTab>('lodges');
+  const [showAddForm, setShowAddForm] = useState(false);
 
-  // Add New Lodge Form state
+  // Add Lodge Form state
   const [title, setTitle] = useState('');
-  const [category, setCategory] = useState<PropertyCategory>('Self-Contain');
-  const [locationArea, setLocationArea] = useState<LocationArea>('School Gate');
+  const [category, setCategory] = useState<PropertyCategory>('Self Contain');
+  const [locationArea, setLocationArea] = useState<LocationArea>('Uturu');
   const [preciseAddress, setPreciseAddress] = useState('');
   const [yearlyRentNaira, setYearlyRentNaira] = useState('200000');
-  const [agentCommissionNaira, setAgentCommissionNaira] = useState('20000');
+  const [agentCommissionNaira, setAgentCommissionNaira] = useState<number>(20000);
   const [availableRooms, setAvailableRooms] = useState('3');
   const [description, setDescription] = useState('');
-  const [amenitiesText, setAmenitiesText] = useState('24/7 Borehole Water, Gated Compound, Prepaid Meter');
+  const [amenitiesText, setAmenitiesText] = useState(
+    '24/7 Borehole Water, Gated Compound, Prepaid Meter'
+  );
   const [landlordName, setLandlordName] = useState('');
   const [landlordPhone, setLandlordPhone] = useState('');
+  const [caretakerName, setCaretakerName] = useState('');
+  const [caretakerPhone, setCaretakerPhone] = useState('');
   const [landlordDoc, setLandlordDoc] = useState('Signed_Landlord_Authorization.pdf');
-  const [uploadedMedia, setUploadedMedia] = useState<
-    { type: 'image' | 'video'; name: string; previewUrl?: string; sizeBytes: number }[]
-  >([]);
+  const [uploadedMedia, setUploadedMedia] = useState<UploadedMediaDraft[]>([]);
   const [uploadProgress, setUploadProgress] = useState(0);
 
   if (!currentUser || currentUser.role !== 'agent') {
     return (
       <div className="max-w-3xl mx-auto px-4 py-16 text-center space-y-4">
-        <h1 className="text-2xl font-display font-bold text-slate-900">Agent Portal Access</h1>
+        <h1 className="text-2xl font-display font-bold text-[#111827]">Agent Portal Access</h1>
         <p className="text-sm text-slate-600">
-          Sign in as an ABSU LodgeSafe Accommodation Agent to manage lodges, inspections, and 45% commission settlements.
+          Sign in as a verified ABSU Lodge agent to manage lodges, inspection alerts, and 40% share earnings.
         </p>
         <button
           type="button"
           onClick={() => setActivePage('home')}
-          className="px-4 py-2 text-sm font-semibold text-white bg-emerald-800 rounded-lg"
+          className="px-5 py-3 min-h-[48px] text-sm font-semibold text-white bg-[#16A34A] hover:bg-[#15803D] rounded-xl"
         >
           Return to Marketplace
         </button>
@@ -96,8 +116,11 @@ export function AgentDashboard() {
     ownerUid: currentUser.uid,
     fullName: currentUser.fullName,
     phone: currentUser.phone,
+    whatsappNumber: currentUser.whatsappNumber || currentUser.phone,
     email: currentUser.email,
     absuId: 'Pending',
+    ninLast4: '----',
+    operatingArea: 'Uturu' as LocationArea,
     idDocumentName: 'Pending',
     profilePhotoUrl: '',
     bankName: 'Pending',
@@ -112,7 +135,6 @@ export function AgentDashboard() {
     createdAt: currentUser.createdAt,
   };
 
-  // Strict agent isolation: agent sees ONLY their own lodges and bookings
   const myLodges = useMemo(
     () => properties.filter((p) => p.agentUid === currentUser.uid),
     [properties, currentUser.uid]
@@ -121,57 +143,101 @@ export function AgentDashboard() {
     () => bookings.filter((b) => b.agentUid === currentUser.uid),
     [bookings, currentUser.uid]
   );
-  const myNotifications = useMemo(
-    () => notifications.filter((n) => n.recipientUid === currentUser.uid),
-    [notifications, currentUser.uid]
+  const myBookingIds = useMemo(() => new Set(myBookings.map((b) => b.bookingId)), [myBookings]);
+  const myAgentTransfers = useMemo(
+    () =>
+      settlements.filter(
+        (s) => s.recipientType === 'agent' && myBookingIds.has(s.bookingId)
+      ),
+    [settlements, myBookingIds]
   );
-  const unreadNotificationCount = useMemo(
+  const unreadAlertsCount = useMemo(
     () => getUnreadNotificationsCount(notifications, currentUser.uid),
     [notifications, currentUser.uid]
   );
 
-  // Earnings aggregation (55% platform deduction / 45% agent earnings)
+  // 40% Agent Share ledger (Strictly separated: Pending 48h Hold vs Available vs Total)
   const earningsStats = useMemo(() => {
-    let grossCommission = 0;
-    let platformDeduction = 0;
-    let agentEarnings = 0;
-    let pendingSettlement = 0;
-    let completedPayouts = 0;
-    let disputedAmount = 0;
-    let refundAdjusted = 0;
+    let pending48hHoldKobo = 0;
+    let availableBalanceKobo = 0;
+    let totalEarnedKobo = 0;
+    let refundFrozenKobo = 0;
 
     for (const bk of myBookings) {
       if (bk.status === 'Pending Payment' || bk.status === 'Payment Failed' || bk.status === 'Cancelled') {
         continue;
       }
-      if (bk.status === 'Refunded') {
-        refundAdjusted += bk.breakdown.agentEarningsKobo;
+      if (bk.status === 'Refunded' || bk.paymentHoldStatus === 'refunded') {
         continue;
       }
-      grossCommission += bk.breakdown.agentCommissionKobo;
-      platformDeduction += bk.breakdown.platformCommissionKobo;
-      agentEarnings += bk.breakdown.agentEarningsKobo;
-      if (bk.status === 'Settled') {
-        completedPayouts += bk.breakdown.agentEarningsKobo;
-      } else if (bk.status === 'Dispute Requested' || bk.status === 'Under SUG Review') {
-        disputedAmount += bk.breakdown.agentEarningsKobo;
+      if (bk.paymentHoldStatus === 'refund_pending' || bk.status === 'Under SUG Review') {
+        refundFrozenKobo += bk.breakdown.agentEarningsKobo;
+        continue;
+      }
+      if (bk.paymentHoldStatus === 'settled' || bk.status === 'Settled') {
+        availableBalanceKobo += bk.breakdown.agentEarningsKobo;
+        totalEarnedKobo += bk.breakdown.agentEarningsKobo;
       } else {
-        pendingSettlement += bk.breakdown.agentEarningsKobo;
+        pending48hHoldKobo += bk.breakdown.agentEarningsKobo;
+        totalEarnedKobo += bk.breakdown.agentEarningsKobo;
       }
     }
 
     return {
-      grossCommission,
-      platformDeduction,
-      agentEarnings,
-      pendingSettlement,
-      completedPayouts,
-      disputedAmount,
-      refundAdjusted,
+      pending48hHoldKobo,
+      availableBalanceKobo,
+      totalEarnedKobo,
+      refundFrozenKobo,
     };
   }, [myBookings]);
 
-  const handleImagesChange = (e: React.ChangeEvent<HTMLInputElement>, slotIndex?: number) => {
+  const descriptionWarning = useMemo(
+    () => detectSuspiciousListingDescription(description),
+    [description]
+  );
+
+  const cloudinaryEnabled = isCloudinaryConfigured();
+
+  const processSingleMediaUpload = async (
+    file: File,
+    kind: 'image' | 'video',
+    targetName: string
+  ) => {
+    if (!cloudinaryEnabled) {
+      return;
+    }
+    try {
+      const result = await uploadFileToCloudinary(file, kind, (pct) => setUploadProgress(pct));
+      setUploadedMedia((prev) =>
+        prev.map((m) =>
+          m.name === targetName
+            ? {
+                ...m,
+                previewUrl: result.secureUrl,
+                cloudinaryPublicId: result.publicId,
+                status: 'ready',
+                error: undefined,
+              }
+            : m
+        )
+      );
+    } catch (err: any) {
+      setUploadedMedia((prev) =>
+        prev.map((m) =>
+          m.name === targetName
+            ? {
+                ...m,
+                status: 'failed',
+                error: err?.message || 'Cloudinary upload failed.',
+              }
+            : m
+        )
+      );
+      showToast('error', `Upload failed for ${targetName}. Click Retry to re-upload.`);
+    }
+  };
+
+  const handleImagesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
@@ -182,77 +248,79 @@ export function AgentDashboard() {
     for (const file of files) {
       const check = validateMediaUpload({ name: file.name, type: file.type, size: file.size });
       if (!check.valid || check.kind !== 'image') {
-        showToast('error', check.error || `${file.name} must be a valid JPG, JPEG, PNG, or WebP image (≤ 5 MB).`);
+        showToast('error', check.error || `${file.name} must be JPG/PNG/WebP (≤ 5MB).`);
         continue;
       }
-      const item = {
-        type: 'image' as const,
+      if (nextImages.length >= 6) {
+        showToast('info', 'Maximum 6 photos allowed per lodge.');
+        break;
+      }
+      const item: UploadedMediaDraft = {
+        type: 'image',
         name: file.name,
         previewUrl: URL.createObjectURL(file),
         sizeBytes: file.size,
+        status: cloudinaryEnabled ? 'uploading' : 'ready',
+        rawFile: file,
       };
-      if (typeof slotIndex === 'number') {
-        nextImages[slotIndex] = item;
-        break;
-      }
-      if (nextImages.length < 4) {
-        nextImages.push(item);
-      } else {
-        showToast('info', 'Maximum of 4 lodge images selected. Remove one to replace.');
-        break;
+      nextImages.push(item);
+      if (cloudinaryEnabled) {
+        processSingleMediaUpload(file, 'image', file.name);
       }
     }
 
-    const compactImages = nextImages.filter(Boolean).slice(0, 4);
-    setUploadedMedia([...compactImages, ...currentVideos]);
-    setUploadProgress(Math.round(((compactImages.length + currentVideos.length) / 5) * 100));
+    setUploadedMedia([...nextImages.slice(0, 6), ...currentVideos]);
+    setUploadProgress(100);
     e.target.value = '';
   };
 
-  const handleVideoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleVideoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const check = validateMediaUpload({ name: file.name, type: file.type, size: file.size });
     if (!check.valid || check.kind !== 'video') {
-      showToast('error', check.error || `${file.name} must be an MP4 walkthrough video (≤ 25 MB).`);
+      showToast('error', check.error || `${file.name} must be MP4/MOV/WebM (≤ 25MB).`);
       e.target.value = '';
       return;
     }
     const currentImages = uploadedMedia.filter((m) => m.type === 'image');
-    const videoItem = {
-      type: 'video' as const,
+    const videoItem: UploadedMediaDraft = {
+      type: 'video',
       name: file.name,
       previewUrl: URL.createObjectURL(file),
       sizeBytes: file.size,
+      status: cloudinaryEnabled ? 'uploading' : 'ready',
+      rawFile: file,
     };
     setUploadedMedia([...currentImages, videoItem]);
-    setUploadProgress(Math.round(((currentImages.length + 1) / 5) * 100));
+    if (cloudinaryEnabled) {
+      processSingleMediaUpload(file, 'video', file.name);
+    } else {
+      setUploadProgress(100);
+    }
     e.target.value = '';
   };
 
-  const removeImageAt = (idx: number) => {
-    const currentImages = uploadedMedia.filter((m) => m.type === 'image');
-    const currentVideos = uploadedMedia.filter((m) => m.type === 'video');
-    currentImages.splice(idx, 1);
-    setUploadedMedia([...currentImages, ...currentVideos]);
-    setUploadProgress(Math.round(((currentImages.length + currentVideos.length) / 5) * 100));
+  const retryFailedMedia = (item: UploadedMediaDraft) => {
+    if (!item.rawFile) return;
+    setUploadedMedia((prev) =>
+      prev.map((m) => (m.name === item.name ? { ...m, status: 'uploading', error: undefined } : m))
+    );
+    processSingleMediaUpload(item.rawFile, item.type, item.name);
   };
 
-  const removeVideo = () => {
-    const currentImages = uploadedMedia.filter((m) => m.type === 'image');
-    setUploadedMedia(currentImages);
-    setUploadProgress(Math.round((currentImages.length / 5) * 100));
+  const removeMediaByName = (name: string) => {
+    setUploadedMedia((prev) => prev.filter((m) => m.name !== name));
   };
 
-  const handleAddLodge = (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitLodgeForm = (saveAsDraft: boolean) => {
     const res = submitNewLodge({
       title,
       category,
       locationArea,
       preciseAddress,
       yearlyRentNaira: Number(yearlyRentNaira),
-      agentCommissionNaira: Number(agentCommissionNaira),
+      agentCommissionNaira,
       availableRooms: Number(availableRooms),
       description,
       amenities: amenitiesText
@@ -261,813 +329,843 @@ export function AgentDashboard() {
         .filter(Boolean),
       landlordName,
       landlordPhone,
+      caretakerName,
+      caretakerPhone,
       landlordAuthorizationDoc: landlordDoc,
-      mediaNames: uploadedMedia,
+      saveAsDraft,
+      mediaNames: uploadedMedia.map((m) => ({
+        type: m.type,
+        name: m.name,
+        previewUrl: m.previewUrl,
+        cloudinaryPublicId: m.cloudinaryPublicId,
+        sizeBytes: m.sizeBytes,
+      })),
     });
+
     if (!res.ok) {
       showToast('error', res.error || 'Failed to submit lodge.');
       return;
     }
+
     setTitle('');
     setPreciseAddress('');
     setDescription('');
     setLandlordName('');
     setLandlordPhone('');
+    setCaretakerName('');
+    setCaretakerPhone('');
     setUploadedMedia([]);
     setUploadProgress(0);
-    setSection('lodges');
+    setShowAddForm(false);
   };
 
-  const navItems: { id: AgentSection; label: string; icon: React.ReactNode }[] = [
-    { id: 'overview', label: 'Overview', icon: <LayoutDashboard className="w-4 h-4" /> },
+  const is2HourReminderDue = (dateStr: string) => {
+    const today = new Date().toISOString().slice(0, 10);
+    return dateStr === today;
+  };
+
+  const images = uploadedMedia.filter((m) => m.type === 'image');
+  const videoItem = uploadedMedia.find((m) => m.type === 'video');
+  const netAgentPreviewNaira = Math.round(agentCommissionNaira * 0.4);
+
+  const navTabs: { id: AgentTab; label: string; icon: React.ReactNode }[] = [
     { id: 'lodges', label: 'My Lodges', icon: <Building2 className="w-4 h-4" /> },
-    { id: 'add-lodge', label: 'Add New Lodge', icon: <PlusCircle className="w-4 h-4" /> },
-    { id: 'inspections', label: 'Inspections', icon: <Calendar className="w-4 h-4" /> },
-    { id: 'bookings', label: 'Bookings', icon: <ClipboardList className="w-4 h-4" /> },
-    { id: 'earnings', label: 'Earnings', icon: <DollarSign className="w-4 h-4" /> },
-    { id: 'payouts', label: 'Payout History', icon: <Wallet className="w-4 h-4" /> },
     {
-      id: 'notifications',
-      label:
-        unreadNotificationCount > 0
-          ? `Notifications (${unreadNotificationCount})`
-          : 'Notifications',
+      id: 'alerts',
+      label: unreadAlertsCount > 0 ? `Booking Alerts (${unreadAlertsCount})` : 'Booking Alerts',
       icon: <Bell className="w-4 h-4" />,
     },
+    { id: 'earnings', label: 'My Earnings', icon: <DollarSign className="w-4 h-4" /> },
     { id: 'profile', label: 'Profile', icon: <User className="w-4 h-4" /> },
-    { id: 'support', label: 'Support', icon: <HelpCircle className="w-4 h-4" /> },
   ];
 
   return (
-    <div className="bg-slate-50 min-h-screen">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 grid lg:grid-cols-12 gap-6 items-start">
-        <aside className="lg:col-span-3 min-w-0 bg-white border border-slate-200 rounded-xl p-4 space-y-4">
-          <div className="border-b border-slate-100 pb-3">
-            <p className="text-xs font-semibold text-emerald-800">Agent Workspace</p>
-            <h1 className="text-base font-display font-bold text-slate-900 mt-0.5">
-              {agentProfile.fullName}
-            </h1>
-            <p className="text-xs font-semibold mt-1 text-slate-600">
-              Account Status:{' '}
-              <span
-                className={
-                  agentProfile.status === 'Approved' ? 'text-emerald-800' : 'text-amber-700'
-                }
-              >
-                {agentProfile.status}
-              </span>
-            </p>
-          </div>
-          <nav className="space-y-1">
-            {navItems.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setSection(item.id)}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm rounded-lg transition-colors text-left ${
-                  section === item.id
-                    ? 'bg-emerald-800 text-white font-semibold'
-                    : 'text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                {item.icon}
-                <span>{item.label}</span>
-              </button>
-            ))}
-          </nav>
-          <div className="border-t border-slate-100 pt-3">
+    <div className="bg-slate-50 min-h-screen text-[#111827]">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
+        {/* Top Agent Workspace Header with Strictly 4 Tabs */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold text-[#16A34A]">
+                Verified Agent Workspace · {agentProfile.operatingArea}
+              </p>
+              <h1 className="text-2xl font-display font-bold text-[#111827] mt-0.5">
+                {agentProfile.fullName}
+              </h1>
+              <p className="text-xs font-semibold mt-1 text-slate-600">
+                Account Status:{' '}
+                <span
+                  className={
+                    agentProfile.status === 'Approved' ? 'text-[#15803D]' : 'text-amber-700'
+                  }
+                >
+                  {agentProfile.status}
+                </span>
+              </p>
+            </div>
             <button
               type="button"
               onClick={logoutUser}
-              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 rounded-lg transition-colors text-left"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100 self-start"
             >
-              <LogOut className="w-4 h-4" />
+              <LogOut className="w-3.5 h-3.5" />
               <span>Log Out</span>
             </button>
           </div>
-        </aside>
 
-        <main className="lg:col-span-9 min-w-0 space-y-6">
-          {agentProfile.status !== 'Approved' && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-950">
-              <strong>Verification Gate:</strong> Your agent account status is{' '}
-              <strong>{agentProfile.status}</strong>. Unapproved agents cannot publish verified lodges. SUG Accommodation Administrators must approve your profile first.
-            </div>
-          )}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 border-t border-slate-100 pt-4">
+            {navTabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => {
+                  setTab(t.id);
+                  setShowAddForm(false);
+                }}
+                className={`min-h-[48px] inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold rounded-xl transition-colors ${
+                  tab === t.id
+                    ? 'bg-[#16A34A] text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                {t.icon}
+                <span>{t.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
 
-          {section === 'overview' && (
-            <div className="space-y-6">
-              <div className="grid sm:grid-cols-4 gap-4">
-                <div className="bg-white border border-slate-200 rounded-xl p-5">
-                  <p className="text-xs text-slate-500">My Lodges</p>
-                  <p className="text-2xl font-display font-bold text-slate-900 tabular-nums mt-1">
-                    {myLodges.length}
-                  </p>
-                </div>
-                <div className="bg-white border border-slate-200 rounded-xl p-5">
-                  <p className="text-xs text-slate-500">Bookings Received</p>
-                  <p className="text-2xl font-display font-bold text-slate-900 tabular-nums mt-1">
-                    {myBookings.length}
-                  </p>
-                </div>
-                <div className="bg-white border border-slate-200 rounded-xl p-5">
-                  <p className="text-xs text-slate-500">My 45% Net Earnings</p>
-                  <p className="text-2xl font-mono font-bold text-emerald-800 tabular-nums mt-1">
-                    {formatNairaFromKobo(earningsStats.agentEarnings)}
-                  </p>
-                </div>
-                <div className="bg-white border border-slate-200 rounded-xl p-5">
-                  <p className="text-xs text-slate-500">Pending Settlement</p>
-                  <p className="text-2xl font-mono font-bold text-slate-900 tabular-nums mt-1">
-                    {formatNairaFromKobo(earningsStats.pendingSettlement)}
-                  </p>
-                </div>
-              </div>
+        {agentProfile.status !== 'Approved' && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-amber-950">
+            <strong>Approval Gate:</strong> Your account is <strong>{agentProfile.status}</strong>. Super Admin must approve your NIN &amp; bank KYC before your lodges go live.
+          </div>
+        )}
 
-              <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-3">
-                <h2 className="text-lg font-display font-bold text-slate-900">
-                  Agent Compliance Restrictions
-                </h2>
-                <ul className="text-sm text-slate-600 space-y-1.5 list-disc pl-5">
-                  <li>Agents cannot modify prices on paid bookings or introduce post-payment charges.</li>
-                  <li>Agents cannot confirm bookings on behalf of students or close disputed cases.</li>
-                  <li>Withdrawals are strictly blocked on unconfirmed or disputed bookings.</li>
-                </ul>
-              </div>
-            </div>
-          )}
-
-          {section === 'lodges' && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-display font-bold text-slate-900">My Lodges</h2>
-                <button
-                  type="button"
-                  onClick={() => setSection('add-lodge')}
-                  className="px-3 py-2 text-xs font-semibold text-white bg-emerald-800 rounded-lg"
-                >
-                  Add New Lodge
-                </button>
-              </div>
-              {myLodges.length === 0 ? (
-                <p className="text-sm text-slate-500">No lodges submitted yet.</p>
-              ) : (
-                <div className="space-y-3">
-                  {myLodges.map((p) => (
-                    <div
-                      key={p.propertyId}
-                      className="border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                    >
-                      <div className="space-y-1">
-                        <p className="text-xs text-slate-500">
-                          {p.locationArea} · {p.category} · Verification:{' '}
-                          <strong className="text-slate-800">{p.verificationStatus}</strong>
-                        </p>
-                        <p className="text-base font-semibold text-slate-900">{p.title}</p>
-                        <p className="text-xs font-mono text-slate-600 tabular-nums">
-                          Rent: {formatNairaFromKobo(p.yearlyRentKobo)} · Commission:{' '}
-                          {formatNairaFromKobo(p.agentCommissionKobo)} · Rooms: {p.availableRooms}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => toggleLodgeAvailability(p.propertyId)}
-                        className="px-3 py-2 text-xs font-semibold border border-slate-200 rounded-lg hover:bg-slate-50 shrink-0"
-                      >
-                        {p.availabilityStatus === 'Available' ? 'Mark Unavailable' : 'Mark Available'}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {section === 'add-lodge' && (
-            <form
-              onSubmit={handleAddLodge}
-              className="bg-white border border-slate-200 rounded-xl p-6 space-y-5"
-            >
+        {/* TAB 1: MY LODGES (with Add New Lodge sub-form) */}
+        {tab === 'lodges' && !showAddForm && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-display font-bold text-slate-900">
-                  Submit New Lodge for SUG Verification
-                </h2>
-                <p className="text-xs text-slate-500 mt-1">
-                  The ₦3,000 inspection fee is generated automatically by the platform. Max commission allowed: {settings.maxCommissionPctOfRent}% of yearly rent.
+                <h2 className="text-lg font-display font-bold text-[#111827]">My Lodges</h2>
+                <p className="text-xs text-slate-500">
+                  Statuses: Draft, Pending, Approved, Rejected, Booked, Taken
                 </p>
               </div>
+              <button
+                type="button"
+                onClick={() => setShowAddForm(true)}
+                className="min-h-[48px] inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-[#16A34A] hover:bg-[#15803D] rounded-xl"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>Add New Lodge</span>
+              </button>
+            </div>
 
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Lodge Name</label>
-                  <input
-                    required
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="e.g. Royal Scholars Annex — Self-Contain"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Accommodation Type
-                  </label>
-                  <select
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value as PropertyCategory)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white"
+            {myLodges.length === 0 ? (
+              <p className="text-sm text-slate-500">No lodges uploaded yet.</p>
+            ) : (
+              <div className="space-y-4">
+                {myLodges.map((p) => (
+                  <div
+                    key={p.propertyId}
+                    className="border border-slate-200 rounded-2xl p-4 space-y-3"
                   >
-                    <option value="Self-Contain">Self-Contain</option>
-                    <option value="Single Room">Single Room</option>
-                    <option value="Two-Bedroom">Two-Bedroom</option>
-                    <option value="Apartment">Apartment</option>
-                    <option value="Shared Hostel">Shared Hostel</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Location Axis</label>
-                  <select
-                    value={locationArea}
-                    onChange={(e) => setLocationArea(e.target.value as LocationArea)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white"
-                  >
-                    <option value="School Gate">School Gate</option>
-                    <option value="Back Gate">Back Gate</option>
-                    <option value="Inside School">Inside School</option>
-                    <option value="Uturu Main Town">Uturu Main Town</option>
-                    <option value="Eke-Okigwe Axis">Eke-Okigwe Axis</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Available Rooms
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={200}
-                    required
-                    value={availableRooms}
-                    onChange={(e) => setAvailableRooms(e.target.value)}
-                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Yearly Rent (₦)
-                  </label>
-                  <input
-                    type="number"
-                    min={10000}
-                    required
-                    value={yearlyRentNaira}
-                    onChange={(e) => setYearlyRentNaira(e.target.value)}
-                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Agent Commission (₦)
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    required
-                    value={agentCommissionNaira}
-                    onChange={(e) => setAgentCommissionNaira(e.target.value)}
-                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Platform Fixed Inspection Fee (Non-Editable)
-                </label>
-                <input
-                  disabled
-                  value="₦3,000 (Generated Automatically by ABSU LodgeSafe)"
-                  className="w-full px-3 py-2 text-sm font-mono bg-slate-100 text-slate-600 border border-slate-200 rounded-lg"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Precise Address (Masked until student books)
-                </label>
-                <input
-                  required
-                  value={preciseAddress}
-                  onChange={(e) => setPreciseAddress(e.target.value)}
-                  placeholder="Plot & street name in Uturu..."
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Description</label>
-                <textarea
-                  required
-                  rows={3}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Amenities (comma-separated)
-                </label>
-                <input
-                  value={amenitiesText}
-                  onChange={(e) => setAmenitiesText(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
-                />
-              </div>
-
-              <div className="grid sm:grid-cols-3 gap-3 border-t border-slate-200 pt-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Landlord Full Name
-                  </label>
-                  <input
-                    required
-                    value={landlordName}
-                    onChange={(e) => setLandlordName(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Landlord Phone
-                  </label>
-                  <input
-                    required
-                    value={landlordPhone}
-                    onChange={(e) => setLandlordPhone(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Landlord Authorization Evidence
-                  </label>
-                  <input
-                    required
-                    value={landlordDoc}
-                    onChange={(e) => setLandlordDoc(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
-                  />
-                </div>
-              </div>
-
-              {/* 4 Images + 1 Video Upload with Live Preview Before Posting */}
-              <div className="border border-slate-200 rounded-xl p-5 space-y-5 bg-slate-50">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-sm font-display font-bold text-slate-900">
-                      Lodge Media Upload &amp; Pre-Post Preview
-                    </h3>
-                    <p className="text-xs text-slate-600 mt-0.5">
-                      Upload <strong>4 photos</strong> (JPG, JPEG, PNG, WebP ≤ 5MB each) and{' '}
-                      <strong>1 walkthrough video</strong> (MP4 ≤ 25MB). Preview every file below before posting.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3 text-xs font-mono">
-                    <span
-                      className={
-                        uploadedMedia.filter((m) => m.type === 'image').length === 4
-                          ? 'text-emerald-800 font-bold'
-                          : 'text-slate-600'
-                      }
-                    >
-                      Photos: {uploadedMedia.filter((m) => m.type === 'image').length}/4
-                    </span>
-                    <span className="text-slate-300">|</span>
-                    <span
-                      className={
-                        uploadedMedia.some((m) => m.type === 'video')
-                          ? 'text-emerald-800 font-bold'
-                          : 'text-slate-600'
-                      }
-                    >
-                      Video: {uploadedMedia.some((m) => m.type === 'video') ? '1/1' : '0/1'}
-                    </span>
-                  </div>
-                </div>
-
-                {uploadProgress > 0 && (
-                  <div className="w-full bg-slate-200 h-1.5 rounded overflow-hidden">
-                    <div
-                      className="bg-emerald-700 h-full transition-all"
-                      style={{ width: `${uploadProgress}%` }}
-                    />
-                  </div>
-                )}
-
-                {/* Bulk / Multi Image Upload + 4 Image Preview Slots */}
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
-                      <ImagePlus className="w-4 h-4 text-emerald-800" />
-                      <span>Lodge Photographs (4 Required)</span>
-                    </span>
-                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 hover:border-emerald-700 cursor-pointer">
-                      <Upload className="w-3.5 h-3.5 text-emerald-800" />
-                      <span>Select up to 4 Photos</span>
-                      <input
-                        type="file"
-                        multiple
-                        accept=".jpg,.jpeg,.png,.webp"
-                        onChange={(e) => handleImagesChange(e)}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {[0, 1, 2, 3].map((slotIdx) => {
-                      const images = uploadedMedia.filter((m) => m.type === 'image');
-                      const img = images[slotIdx];
-                      const slotLabels = [
-                        'Photo 1 (Cover)',
-                        'Photo 2 (Room)',
-                        'Photo 3 (Bath/Kitchen)',
-                        'Photo 4 (Compound)',
-                      ];
-                      return (
-                        <div
-                          key={slotIdx}
-                          className="min-w-0 bg-white border border-slate-200 rounded-lg overflow-hidden flex flex-col"
-                        >
-                          <div className="relative aspect-[4/3] bg-slate-100 flex items-center justify-center">
-                            {img?.previewUrl ? (
-                              <>
-                                <img
-                                  src={img.previewUrl}
-                                  alt={slotLabels[slotIdx]}
-                                  className="w-full h-full object-cover"
-                                />
-                                <button
-                                  type="button"
-                                  aria-label={`Remove ${slotLabels[slotIdx]}`}
-                                  onClick={() => removeImageAt(slotIdx)}
-                                  className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/70 text-white flex items-center justify-center hover:bg-rose-700"
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                </button>
-                              </>
-                            ) : (
-                              <label className="w-full h-full flex flex-col items-center justify-center gap-1 p-2 text-center cursor-pointer hover:bg-emerald-50/50 transition-colors">
-                                <ImagePlus className="w-5 h-5 text-slate-400" />
-                                <span className="text-[11px] font-medium text-slate-600">
-                                  {slotLabels[slotIdx]}
-                                </span>
-                                <input
-                                  type="file"
-                                  accept=".jpg,.jpeg,.png,.webp"
-                                  onChange={(e) => handleImagesChange(e, slotIdx)}
-                                  className="hidden"
-                                />
-                              </label>
-                            )}
-                          </div>
-                          <div className="px-2.5 py-1.5 border-t border-slate-100 text-[11px] text-slate-600 truncate">
-                            {img ? img.name : 'Empty slot'}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* 1 Walkthrough Video Upload + Live Video Preview */}
-                <div className="space-y-3 pt-2 border-t border-slate-200">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
-                      <Film className="w-4 h-4 text-emerald-800" />
-                      <span>Walkthrough Video Tour (1 MP4 Required ≤ 25MB)</span>
-                    </span>
-                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 hover:border-emerald-700 cursor-pointer">
-                      <Upload className="w-3.5 h-3.5 text-emerald-800" />
-                      <span>
-                        {uploadedMedia.some((m) => m.type === 'video')
-                          ? 'Replace Walkthrough Video'
-                          : 'Upload MP4 Video'}
-                      </span>
-                      <input
-                        type="file"
-                        accept=".mp4,video/mp4"
-                        onChange={handleVideoChange}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
-
-                  {(() => {
-                    const videoItem = uploadedMedia.find((m) => m.type === 'video');
-                    if (!videoItem) {
-                      return (
-                        <label className="block border border-dashed border-slate-300 bg-white rounded-lg p-5 text-center cursor-pointer hover:border-emerald-700">
-                          <Film className="w-6 h-6 text-slate-400 mx-auto mb-1.5" />
-                          <p className="text-xs font-medium text-slate-700">
-                            Click to attach MP4 walkthrough tour video for live preview
-                          </p>
-                          <input
-                            type="file"
-                            accept=".mp4,video/mp4"
-                            onChange={handleVideoChange}
-                            className="hidden"
-                          />
-                        </label>
-                      );
-                    }
-                    return (
-                      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-                        <div className="bg-black">
-                          <video
-                            controls
-                            playsInline
-                            src={videoItem.previewUrl}
-                            className="w-full max-h-64 mx-auto"
-                          />
-                        </div>
-                        <div className="px-3.5 py-2.5 flex items-center justify-between gap-3 text-xs border-t border-slate-100">
-                          <div className="min-w-0 flex-1 flex items-center gap-2 text-slate-700">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                            <span className="font-medium truncate">{videoItem.name}</span>
-                            <span className="font-mono text-slate-400 shrink-0">
-                              ({(videoItem.sizeBytes / (1024 * 1024)).toFixed(2)} MB)
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex gap-3.5">
+                        <img
+                          src={p.coverImageUrl}
+                          alt={p.title}
+                          className="w-20 h-16 rounded-xl object-cover border border-slate-200 shrink-0"
+                        />
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="font-semibold text-[#111827]">{p.locationArea}</span>
+                            <span>·</span>
+                            <span className="text-slate-600">{p.category}</span>
+                            <span>·</span>
+                            <span
+                              className={`font-bold px-2 py-0.5 rounded-full ${
+                                p.lodgeStatus === 'Approved'
+                                  ? 'bg-green-50 text-[#15803D]'
+                                  : p.lodgeStatus === 'Rejected'
+                                  ? 'bg-rose-50 text-rose-700'
+                                  : p.lodgeStatus === 'Taken' || p.lodgeStatus === 'Booked'
+                                  ? 'bg-slate-200 text-slate-800'
+                                  : 'bg-amber-50 text-amber-800'
+                              }`}
+                            >
+                              {p.lodgeStatus}
                             </span>
                           </div>
+                          <p className="text-base font-bold text-[#111827]">{p.title}</p>
+                          <p className="text-xs font-mono text-slate-600 tabular-nums">
+                            Rent: {formatNairaFromKobo(p.yearlyRentKobo)} · Agent Fee:{' '}
+                            {formatNairaFromKobo(p.agentCommissionKobo)} · Rooms: {p.availableRooms}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 shrink-0">
+                        {p.lodgeStatus === 'Draft' && (
                           <button
                             type="button"
-                            onClick={removeVideo}
-                            className="text-rose-700 font-semibold hover:underline shrink-0"
+                            onClick={() => toggleLodgeAvailability(p.propertyId, 'Pending')}
+                            className="px-3.5 py-2 text-xs font-semibold text-white bg-[#16A34A] rounded-xl"
                           >
-                            Remove Video
+                            Submit for Approval
                           </button>
-                        </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            toggleLodgeAvailability(
+                              p.propertyId,
+                              p.lodgeStatus === 'Taken' ? 'Approved' : ('Taken' as LodgeStatus)
+                            )
+                          }
+                          className="px-3.5 py-2 text-xs font-semibold border border-slate-200 rounded-xl hover:bg-slate-50"
+                        >
+                          {p.lodgeStatus === 'Taken' || p.availabilityStatus === 'Unavailable'
+                            ? 'Mark Available'
+                            : 'Mark Taken'}
+                        </button>
                       </div>
-                    );
-                  })()}
+                    </div>
+
+                    {p.lodgeStatus === 'Rejected' && p.rejectionReason && (
+                      <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-900">
+                        <strong>SUG Rejection Reason:</strong> {p.rejectionReason}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ADD LODGE FORM */}
+        {tab === 'lodges' && showAddForm && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitLodgeForm(false);
+            }}
+            className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div>
+                <h2 className="text-lg font-display font-bold text-[#111827]">
+                  Add New Lodge (3–6 Photos + Optional Video)
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Annual rent is paid directly to the landlord after inspection. Choose one SUG-approved Agent Fee tier below.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddForm(false)}
+                className="px-3 py-2 text-xs font-semibold border border-slate-200 rounded-xl"
+              >
+                Back to My Lodges
+              </button>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Lodge Title</label>
+                <input
+                  required
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="e.g. Victory Scholars Lodge — Self Contain"
+                  className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Room Type</label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value as PropertyCategory)}
+                  className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl bg-white"
+                >
+                  {ROOM_TYPE_OPTIONS.map((rt) => (
+                    <option key={rt} value={rt}>
+                      {rt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Location</label>
+                <select
+                  value={locationArea}
+                  onChange={(e) => setLocationArea(e.target.value as LocationArea)}
+                  className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl bg-white"
+                >
+                  {LOCATION_OPTIONS.map((loc) => (
+                    <option key={loc} value={loc}>
+                      {loc}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Available Rooms
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  required
+                  value={availableRooms}
+                  onChange={(e) => setAvailableRooms(e.target.value)}
+                  className="w-full px-3 py-2.5 text-sm font-mono border border-slate-200 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Annual Rent Paid Direct to Landlord (₦)
+                </label>
+                <input
+                  type="number"
+                  min={10000}
+                  required
+                  value={yearlyRentNaira}
+                  onChange={(e) => setYearlyRentNaira(e.target.value)}
+                  className="w-full px-3 py-2.5 text-sm font-mono border border-slate-200 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Agent Fee (Your 40% Net Share: ₦{netAgentPreviewNaira.toLocaleString()})
+                </label>
+                <select
+                  value={agentCommissionNaira}
+                  onChange={(e) => setAgentCommissionNaira(Number(e.target.value))}
+                  className="w-full px-3 py-2.5 text-sm font-mono border border-slate-200 rounded-xl bg-white"
+                >
+                  {ALLOWED_AGENT_FEES_NAIRA.map((fee) => (
+                    <option key={fee} value={fee}>
+                      ₦{fee.toLocaleString()} (You earn ₦{(fee * 0.4).toLocaleString()} after 48h)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                Precise Lodge Address (Hidden until booked)
+              </label>
+              <input
+                required
+                value={preciseAddress}
+                onChange={(e) => setPreciseAddress(e.target.value)}
+                placeholder="Plot & street name in Uturu..."
+                className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                Lodge Description (Do NOT include payment links, bank account numbers, or rent collection requests)
+              </label>
+              <textarea
+                required
+                rows={3}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
+              />
+              {descriptionWarning.flagged && (
+                <div className="mt-2 bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-900 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>
+                    Warning: {descriptionWarning.reason}. Remove links/account numbers before submitting.
+                  </span>
                 </div>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                Amenities (comma-separated)
+              </label>
+              <input
+                value={amenitiesText}
+                onChange={(e) => setAmenitiesText(e.target.value)}
+                className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl"
+              />
+            </div>
+
+            {/* Mandatory Landlord & Caretaker Details */}
+            <div className="grid sm:grid-cols-2 gap-4 border-t border-slate-200 pt-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Landlord Full Name (Mandatory)
+                </label>
+                <input
+                  required
+                  value={landlordName}
+                  onChange={(e) => setLandlordName(e.target.value)}
+                  className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Landlord Phone (Mandatory)
+                </label>
+                <input
+                  required
+                  value={landlordPhone}
+                  onChange={(e) => setLandlordPhone(e.target.value)}
+                  placeholder="+234 80..."
+                  className="w-full px-3 py-2.5 text-sm font-mono border border-slate-200 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Caretaker Full Name (Mandatory)
+                </label>
+                <input
+                  required
+                  value={caretakerName}
+                  onChange={(e) => setCaretakerName(e.target.value)}
+                  className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Caretaker Phone (Mandatory)
+                </label>
+                <input
+                  required
+                  value={caretakerPhone}
+                  onChange={(e) => setCaretakerPhone(e.target.value)}
+                  placeholder="+234 80..."
+                  className="w-full px-3 py-2.5 text-sm font-mono border border-slate-200 rounded-xl"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Landlord Authorization Document Reference
+                </label>
+                <input
+                  required
+                  value={landlordDoc}
+                  onChange={(e) => setLandlordDoc(e.target.value)}
+                  className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl"
+                />
+              </div>
+            </div>
+
+            {/* Cloudinary Media Upload & Pre-Post Preview (3–6 photos + optional 1 video) */}
+            <div className="border border-slate-200 rounded-2xl p-5 space-y-4 bg-slate-50">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-display font-bold text-[#111827]">
+                    Lodge Photos (3–6) &amp; Optional Video (max 1)
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    {cloudinaryEnabled
+                      ? 'Direct Cloudinary upload active with automatic optimization.'
+                      : 'Local preview mode (configure VITE_CLOUDINARY_CLOUD_NAME & VITE_CLOUDINARY_UPLOAD_PRESET for live CDN).'}
+                  </p>
+                </div>
+                <span className="text-xs font-mono font-bold text-[#16A34A]">
+                  Photos: {images.length}/6 (min 3) · Video: {videoItem ? '1/1' : '0/1'}
+                </span>
               </div>
 
-              <button
-                type="submit"
-                className="px-5 py-2.5 bg-emerald-800 text-white text-sm font-semibold rounded-lg hover:bg-emerald-900"
-              >
-                Submit Lodge for SUG Verification
-              </button>
-            </form>
-          )}
+              {uploadProgress > 0 && uploadProgress < 100 && (
+                <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                  <div
+                    className="bg-[#16A34A] h-full transition-all"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+              )}
 
-          {(section === 'inspections' || section === 'bookings') && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-              <h2 className="text-lg font-display font-bold text-slate-900">
-                {section === 'inspections' ? 'Scheduled Student Inspections' : 'Lodge Bookings'}
-              </h2>
-              {myBookings.length === 0 ? (
-                <p className="text-sm text-slate-500">No bookings recorded yet.</p>
-              ) : (
-                <div className="space-y-4">
-                  {myBookings.map((bk) => (
+              <div className="flex flex-wrap gap-3">
+                <label className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-semibold text-[#111827] hover:border-[#16A34A] cursor-pointer">
+                  <ImagePlus className="w-4 h-4 text-[#16A34A]" />
+                  <span>Upload Photos (3–6)</span>
+                  <input
+                    type="file"
+                    multiple
+                    accept=".jpg,.jpeg,.png,.webp"
+                    onChange={handleImagesChange}
+                    className="hidden"
+                  />
+                </label>
+
+                <label className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-semibold text-[#111827] hover:border-[#16A34A] cursor-pointer">
+                  <Film className="w-4 h-4 text-[#16A34A]" />
+                  <span>{videoItem ? 'Replace Video' : 'Upload Optional Video (Max 1)'}</span>
+                  <input
+                    type="file"
+                    accept=".mp4,.mov,.webm,video/mp4,video/quicktime,video/webm"
+                    onChange={handleVideoChange}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+
+              {images.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {images.map((img) => (
                     <div
-                      key={bk.bookingId}
-                      className="border border-slate-200 rounded-xl p-4 space-y-3 text-xs"
+                      key={img.name}
+                      className="bg-white border border-slate-200 rounded-xl overflow-hidden"
                     >
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div className="space-y-1">
-                          <p className="font-mono text-slate-500">
-                            {bk.bookingReference} · Inspection Date: {bk.inspectionDate}
-                          </p>
-                          <p className="text-sm font-semibold text-slate-900">{bk.propertyTitle}</p>
-                          <p className="text-slate-600">
-                            Student: <strong>{bk.studentName}</strong> ({bk.studentMatric})
-                          </p>
-                        </div>
-                        <div className="sm:text-right space-y-1">
-                          <p className="font-semibold text-emerald-800">{bk.status}</p>
-                          <p className="font-mono tabular-nums text-slate-700">
-                            Your 45% share: {formatNairaFromKobo(bk.breakdown.agentEarningsKobo)}
-                          </p>
-                        </div>
+                      <div className="relative aspect-[4/3] bg-slate-100">
+                        <img
+                          src={img.previewUrl}
+                          alt={img.name}
+                          className="w-full h-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeMediaByName(img.name)}
+                          className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/70 text-white flex items-center justify-center hover:bg-rose-700"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
                       </div>
-
-                      {bk.inspectionContact ? (
-                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3.5 space-y-1.5">
-                          <p className="font-semibold text-emerald-950 flex items-center gap-1.5">
-                            <PhoneCall className="w-3.5 h-3.5 text-emerald-800" />
-                            <span>Student Inspection Contact Information</span>
-                          </p>
-                          <div className="grid sm:grid-cols-2 gap-2 text-slate-800">
-                            <p>
-                              Contact Name: <strong>{bk.inspectionContact.fullName}</strong>
-                            </p>
-                            <p>
-                              Phone:{' '}
-                              <a
-                                href={`tel:${bk.inspectionContact.phoneNumber}`}
-                                className="font-mono font-semibold text-emerald-900 underline"
-                              >
-                                {bk.inspectionContact.phoneNumber}
-                              </a>
-                            </p>
-                            {bk.inspectionContact.whatsappOrAltPhone && (
-                              <p>
-                                WhatsApp / Alt:{' '}
-                                <span className="font-mono font-semibold">
-                                  {bk.inspectionContact.whatsappOrAltPhone}
-                                </span>
-                              </p>
-                            )}
-                            <p>
-                              Time Window: <strong>{bk.inspectionContact.preferredTimeSlot}</strong>
-                            </p>
-                            <p className="sm:col-span-2">
-                              Campus Meetup Point:{' '}
-                              <strong>{bk.inspectionContact.campusMeetupPoint}</strong>
-                            </p>
-                            {bk.inspectionContact.notesForAgent && (
-                              <p className="sm:col-span-2 text-slate-700">
-                                Student Note: &quot;{bk.inspectionContact.notesForAgent}&quot;
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-slate-600">
-                          Awaiting student inspection contact submission after payment.
-                        </div>
-                      )}
+                      <div className="px-2.5 py-1.5 text-[11px] flex items-center justify-between gap-2">
+                        <span className="truncate">{img.name}</span>
+                        {img.status === 'failed' && (
+                          <button
+                            type="button"
+                            onClick={() => retryFailedMedia(img)}
+                            className="inline-flex items-center gap-1 text-rose-700 font-bold shrink-0"
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                            <span>Retry</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
-            </div>
-          )}
 
-          {section === 'earnings' && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+              {videoItem && (
+                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                  <video controls playsInline src={videoItem.previewUrl} className="w-full max-h-56 bg-black" />
+                  <div className="px-3.5 py-2 flex items-center justify-between text-xs">
+                    <span className="font-medium truncate">{videoItem.name}</span>
+                    <div className="flex items-center gap-3">
+                      {videoItem.status === 'failed' && (
+                        <button
+                          type="button"
+                          onClick={() => retryFailedMedia(videoItem)}
+                          className="text-rose-700 font-bold"
+                        >
+                          Retry Upload
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeMediaByName(videoItem.name)}
+                        className="text-rose-700 font-semibold"
+                      >
+                        Remove Video
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              <button
+                type="submit"
+                className="min-h-[48px] flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 bg-[#16A34A] hover:bg-[#15803D] text-white text-sm font-bold rounded-xl"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Submit Lodge for SUG Approval</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => submitLodgeForm(true)}
+                className="min-h-[48px] px-5 py-3 border border-slate-300 text-slate-800 text-sm font-semibold rounded-xl hover:bg-slate-50"
+              >
+                Save as Draft
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* TAB 2: BOOKING ALERTS */}
+        {tab === 'alerts' && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+            <h2 className="text-lg font-display font-bold text-[#111827]">
+              Booking Alerts &amp; Inspection Coordination
+            </h2>
+            {myBookings.length === 0 ? (
+              <p className="text-sm text-slate-500">No student inspection bookings yet.</p>
+            ) : (
+              <div className="space-y-4">
+                {myBookings.map((bk) => {
+                  const studentPhone = bk.inspectionContact?.phoneNumber || bk.studentPhone || '+2348034128890';
+                  const studentWa = bk.inspectionContact?.whatsappOrAltPhone || studentPhone;
+                  const timeWindow =
+                    bk.inspectionContact?.preferredTimeSlot || bk.inspectionTimeSlot || 'Morning: 9am–12pm';
+                  const reminderDue = is2HourReminderDue(bk.inspectionDate);
+
+                  return (
+                    <div
+                      key={bk.bookingId}
+                      className="border border-slate-200 rounded-2xl p-5 space-y-3 text-xs"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <p className="font-mono text-slate-500">
+                            {bk.bookingReference} · Inspection: {bk.inspectionDate} ({timeWindow})
+                          </p>
+                          <h3 className="text-base font-bold text-[#111827]">{bk.propertyTitle}</h3>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {reminderDue && bk.paymentHoldStatus === 'held' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-100 text-amber-900 font-bold rounded-full">
+                              <Clock className="w-3 h-3" />
+                              2h Inspection Reminder Active
+                            </span>
+                          )}
+                          <span className="font-bold text-[#16A34A]">{bk.status}</span>
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 grid sm:grid-cols-2 gap-2">
+                        <p>
+                          Student Name: <strong>{bk.inspectionContact?.fullName || bk.studentName}</strong>
+                        </p>
+                        <p>
+                          Phone: <strong className="font-mono">{studentPhone}</strong>
+                        </p>
+                        <p>
+                          WhatsApp: <strong className="font-mono">{studentWa}</strong>
+                        </p>
+                        <p>
+                          Your 40% Share:{' '}
+                          <strong className="font-mono text-[#16A34A]">
+                            {formatNairaFromKobo(bk.breakdown.agentEarningsKobo)}
+                          </strong>
+                        </p>
+                        {bk.inspectionContact?.notesForAgent && (
+                          <p className="sm:col-span-2 text-slate-600">
+                            Notes: &quot;{bk.inspectionContact.notesForAgent}&quot;
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap gap-2.5">
+                        <a
+                          href={`tel:${studentPhone}`}
+                          className="min-h-[48px] inline-flex items-center gap-2 px-4 py-2.5 bg-[#16A34A] hover:bg-[#15803D] text-white font-bold rounded-xl"
+                        >
+                          <PhoneCall className="w-4 h-4" />
+                          <span>Call Student</span>
+                        </a>
+                        <a
+                          href={buildAgentWhatsAppLink({
+                            phone: studentWa,
+                            studentName: bk.inspectionContact?.fullName || bk.studentName,
+                            lodgeTitle: bk.propertyTitle,
+                            bookingReference: bk.bookingReference,
+                            inspectionDate: bk.inspectionDate,
+                            inspectionTime: timeWindow,
+                          })}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="min-h-[48px] inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-green-300 text-[#15803D] hover:bg-green-50 font-bold rounded-xl"
+                        >
+                          <MessageCircle className="w-4 h-4" />
+                          <span>WhatsApp Student</span>
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 3: MY EARNINGS */}
+        {tab === 'earnings' && (
+          <div className="space-y-6">
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
               <div>
-                <h2 className="text-lg font-display font-bold text-slate-900">
-                  Agent Commission &amp; 55/45 Earnings Ledger
+                <h2 className="text-lg font-display font-bold text-[#111827]">
+                  My Earnings (40% of Agent Fee · Released After 48h Hold)
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  Example split: On ₦20,000 agent commission, Platform receives ₦11,000 (55%) and Agent receives ₦9,000 (45%). Agents do not earn a percentage of landlord rent.
+                  Pending 48-hour hold balances cannot be withdrawn until the student confirms or 48 hours pass without a refund claim.
                 </p>
               </div>
-              <dl className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
-                <div className="border border-slate-200 rounded-lg p-4">
-                  <dt className="text-xs text-slate-500">Total Agent Commissions</dt>
-                  <dd className="text-lg font-mono font-bold text-slate-900 tabular-nums mt-1">
-                    {formatNairaFromKobo(earningsStats.grossCommission)}
-                  </dd>
-                </div>
-                <div className="border border-slate-200 rounded-lg p-4">
-                  <dt className="text-xs text-slate-500">Platform Deduction (55%)</dt>
-                  <dd className="text-lg font-mono font-bold text-slate-700 tabular-nums mt-1">
-                    -{formatNairaFromKobo(earningsStats.platformDeduction)}
-                  </dd>
-                </div>
-                <div className="border border-emerald-200 bg-emerald-50/50 rounded-lg p-4">
-                  <dt className="text-xs text-emerald-900">Agent Earnings (45%)</dt>
-                  <dd className="text-lg font-mono font-bold text-emerald-900 tabular-nums mt-1">
-                    {formatNairaFromKobo(earningsStats.agentEarnings)}
-                  </dd>
-                </div>
-                <div className="border border-slate-200 rounded-lg p-4">
-                  <dt className="text-xs text-slate-500">Pending Settlements (Held)</dt>
-                  <dd className="text-lg font-mono font-bold text-amber-800 tabular-nums mt-1">
-                    {formatNairaFromKobo(earningsStats.pendingSettlement)}
-                  </dd>
-                </div>
-                <div className="border border-slate-200 rounded-lg p-4">
-                  <dt className="text-xs text-slate-500">Completed Payouts</dt>
-                  <dd className="text-lg font-mono font-bold text-emerald-800 tabular-nums mt-1">
-                    {formatNairaFromKobo(earningsStats.completedPayouts)}
-                  </dd>
-                </div>
-                <div className="border border-slate-200 rounded-lg p-4">
-                  <dt className="text-xs text-slate-500">Disputed / Refund Adjusted</dt>
-                  <dd className="text-lg font-mono font-bold text-rose-800 tabular-nums mt-1">
-                    {formatNairaFromKobo(earningsStats.disputedAmount + earningsStats.refundAdjusted)}
-                  </dd>
-                </div>
-              </dl>
-              <p className="text-xs text-slate-500">
-                Note: Agents cannot withdraw funds from unconfirmed or disputed bookings.
-              </p>
-            </div>
-          )}
 
-          {section === 'payouts' && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-              <h2 className="text-lg font-display font-bold text-slate-900">Payout History</h2>
-              <div className="space-y-2 text-xs">
-                {myBookings.filter((b) => b.status === 'Settled').length === 0 ? (
-                  <p className="text-slate-500">No settled payouts yet.</p>
+              <div className="grid sm:grid-cols-3 gap-4">
+                <div className="border border-amber-200 bg-amber-50/50 rounded-2xl p-4">
+                  <p className="text-xs font-semibold text-amber-900">
+                    Pending (48-Hour Hold — Not Withdrawable)
+                  </p>
+                  <p className="text-xl font-mono font-bold text-amber-900 tabular-nums mt-1">
+                    {formatNairaFromKobo(earningsStats.pending48hHoldKobo)}
+                  </p>
+                </div>
+                <div className="border border-green-200 bg-green-50/60 rounded-2xl p-4">
+                  <p className="text-xs font-semibold text-[#15803D]">
+                    Available Balance (Settled 40%)
+                  </p>
+                  <p className="text-xl font-mono font-bold text-[#16A34A] tabular-nums mt-1">
+                    {formatNairaFromKobo(earningsStats.availableBalanceKobo)}
+                  </p>
+                </div>
+                <div className="border border-slate-200 rounded-2xl p-4">
+                  <p className="text-xs text-slate-500">Total Earned (Excl. Refunds)</p>
+                  <p className="text-xl font-mono font-bold text-[#111827] tabular-nums mt-1">
+                    {formatNairaFromKobo(earningsStats.totalEarnedKobo)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-6">
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-3">
+                <h3 className="text-base font-display font-bold text-[#111827] flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-[#16A34A]" />
+                  <span>Successful Transfers</span>
+                </h3>
+                {myAgentTransfers.filter((s) => s.status === 'successful').length === 0 ? (
+                  <p className="text-xs text-slate-500">No completed transfers yet.</p>
                 ) : (
-                  myBookings
-                    .filter((b) => b.status === 'Settled')
-                    .map((b) => (
-                      <div
-                        key={b.bookingId}
-                        className="border border-slate-200 rounded-lg p-3 flex items-center justify-between"
-                      >
-                        <div>
-                          <p className="font-semibold text-slate-900">{b.propertyTitle}</p>
-                          <p className="font-mono text-slate-500">
-                            {b.bookingReference} · Settled {b.updatedAt.slice(0, 10)}
-                          </p>
+                  <div className="space-y-2 text-xs">
+                    {myAgentTransfers
+                      .filter((s) => s.status === 'successful')
+                      .map((s) => (
+                        <div
+                          key={s.settlementId}
+                          className="border border-slate-200 rounded-xl p-3 flex items-center justify-between"
+                        >
+                          <div>
+                            <p className="font-mono font-semibold text-[#111827]">
+                              {s.bookingReference}
+                            </p>
+                            <p className="text-slate-500">
+                              Ref: {s.transferCode || s.settlementId} · {s.updatedAt.slice(0, 10)}
+                            </p>
+                          </div>
+                          <span className="font-mono font-bold text-[#16A34A]">
+                            {formatNairaFromKobo(s.amountKobo)}
+                          </span>
                         </div>
-                        <span className="font-mono font-bold text-emerald-800 tabular-nums">
-                          {formatNairaFromKobo(b.breakdown.agentEarningsKobo)}
-                        </span>
-                      </div>
-                    ))
+                      ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-3">
+                <h3 className="text-base font-display font-bold text-[#111827] flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600" />
+                  <span>Failed Transfers</span>
+                </h3>
+                {myAgentTransfers.filter((s) => s.status === 'failed').length === 0 ? (
+                  <p className="text-xs text-slate-500">No failed bank transfers.</p>
+                ) : (
+                  <div className="space-y-2 text-xs">
+                    {myAgentTransfers
+                      .filter((s) => s.status === 'failed')
+                      .map((s) => (
+                        <div
+                          key={s.settlementId}
+                          className="border border-rose-200 bg-rose-50 rounded-xl p-3 flex items-center justify-between"
+                        >
+                          <div>
+                            <p className="font-mono font-semibold text-rose-900">
+                              {s.bookingReference}
+                            </p>
+                            <p className="text-rose-700">
+                              {s.failureReason || 'Transfer retry scheduled by Super Admin.'}
+                            </p>
+                          </div>
+                          <span className="font-mono font-bold text-rose-900">
+                            {formatNairaFromKobo(s.amountKobo)}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
                 )}
               </div>
             </div>
-          )}
+          </div>
+        )}
 
-          {section === 'notifications' && (
-            <NotificationsPanel
-              role="agent"
-              notifications={myNotifications}
-              onNavigate={(target) => {
-                if (target.type === 'property') {
-                  openPropertyDetails(target.propertyId);
-                } else {
-                  setSection(target.section as AgentSection);
-                }
-              }}
-            />
-          )}
-
-          {section === 'profile' && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+        {/* TAB 4: PROFILE */}
+        {tab === 'profile' && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                {agentProfile.profilePhotoUrl && (
+                  <img
+                    src={agentProfile.profilePhotoUrl}
+                    alt={agentProfile.fullName}
+                    className="w-12 h-12 rounded-full object-cover border border-slate-200"
+                  />
+                )}
                 <div>
-                  <h2 className="text-lg font-display font-bold text-slate-900">
-                    Agent Verification Profile
+                  <h2 className="text-lg font-display font-bold text-[#111827]">
+                    Agent KYC &amp; Payout Profile
                   </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    ABSU Agent KYC record, settlement bank account, and session controls.
+                  <p className="text-xs text-slate-500">
+                    Status: {agentProfile.status} · Operating Area: {agentProfile.operatingArea}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={logoutUser}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  <span>Log Out</span>
-                </button>
               </div>
-              <dl className="grid sm:grid-cols-2 gap-4 text-sm">
-                <div>
-                  <dt className="text-xs text-slate-500">Full Name</dt>
-                  <dd className="font-semibold text-slate-900">{agentProfile.fullName}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-slate-500">ABSU Agent ID</dt>
-                  <dd className="font-mono text-slate-900">{agentProfile.absuId}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-slate-500">Email</dt>
-                  <dd className="text-slate-800">{agentProfile.email}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-slate-500">Phone</dt>
-                  <dd className="text-slate-800">{agentProfile.phone}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-slate-500">Bank Account</dt>
-                  <dd className="font-mono text-slate-900">
-                    {agentProfile.bankName} · {agentProfile.accountNumber}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-slate-500">Emergency Contact</dt>
-                  <dd className="text-slate-800">{agentProfile.emergencyContact}</dd>
-                </div>
-              </dl>
+              <button
+                type="button"
+                onClick={logoutUser}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Log Out</span>
+              </button>
             </div>
-          )}
-
-          {section === 'support' && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-3">
-              <h2 className="text-lg font-display font-bold text-slate-900">Agent Support</h2>
-              <p className="text-sm text-slate-600">
-                Contact the SUG Accommodation Verification Committee at{' '}
-                <span className="font-mono">agents@absulodgesafe.ng</span> for KYC review or landlord authorization updates.
-              </p>
-            </div>
-          )}
-        </main>
+            <dl className="grid sm:grid-cols-2 gap-4 text-sm">
+              <div>
+                <dt className="text-xs text-slate-500">Full Name</dt>
+                <dd className="font-semibold text-[#111827]">{agentProfile.fullName}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">NIN Verification Ref</dt>
+                <dd className="font-mono text-[#111827]">••••••{agentProfile.ninLast4 || '0000'}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">Phone &amp; WhatsApp</dt>
+                <dd className="font-mono text-slate-800">
+                  {agentProfile.phone} / {agentProfile.whatsappNumber || agentProfile.phone}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">Email</dt>
+                <dd className="text-slate-800">{agentProfile.email}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">Settlement Bank Account</dt>
+                <dd className="font-mono text-[#111827]">
+                  {agentProfile.bankName} · {agentProfile.accountNumber} ({agentProfile.accountName})
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">Emergency Contact</dt>
+                <dd className="text-slate-800">{agentProfile.emergencyContact}</dd>
+              </div>
+            </dl>
+          </div>
+        )}
       </div>
     </div>
   );

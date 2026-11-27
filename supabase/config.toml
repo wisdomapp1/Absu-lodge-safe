@@ -1,0 +1,38 @@
+project_id = "jjidjcnyknoavmefrrpi"
+
+[functions.initialize-payment]
+verify_jwt = true
+
+[functions.verify-payment]
+verify_jwt = true
+
+[functions.paystack-webhook]
+verify_jwt = false
+
+[functions.process-splits]
+verify_jwt = false
+
+[functions.process-auto-confirmations]
+verify_jwt = false
+
+[functions.request-refund]
+verify_jwt = true
+
+[functions.process-refund]
+verify_jwt = true
+
+[functions.notify-booking-agent]
+verify_jwt = true
+
+[functions.notify-booking-student]
+verify_jwt = true
+
+[functions.manage-agent-approval]
+verify_jwt = true
+
+[functions.manage-lodge-approval]
+verify_jwt = true
+
+# Hourly Cron Schedules (Apply in Supabase Dashboard -> Edge Functions / pg_cron):
+# - process-auto-confirmations: "0 * * * *" (Every hour)
+# - process-splits:             "15 * * * *" (Every hour, after auto-confirmations)

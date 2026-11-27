@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { MessageCircle } from 'lucide-react';
 import { AuthModal } from './components/AuthModal';
 import { AgentDashboard } from './components/AgentDashboard';
 import { CheckoutModal } from './components/CheckoutModal';
@@ -21,7 +22,7 @@ function AppShell() {
   }, [activePage, selectedPropertyId]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-white text-slate-900">
+    <div className="min-h-screen flex flex-col bg-white text-[#111827]">
       <Navbar />
       <main className="flex-1">
         {activePage === 'home' && <MarketplaceHome />}
@@ -34,16 +35,29 @@ function AppShell() {
       </main>
       <AuthModal />
       <CheckoutModal />
+
+      {/* Floating WhatsApp Support Contact Button */}
+      <a
+        href="https://wa.me/2348091120045?text=Hello%20ABSU%20Lodge%20Support%2C%20I%20need%20help%20with%20an%20accommodation%20booking%20in%20Uturu."
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="WhatsApp ABSU Lodge Support"
+        className="fixed bottom-4 right-4 z-40 inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-[#16A34A] text-white text-xs font-semibold shadow-lg hover:bg-[#15803D] transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16A34A]"
+      >
+        <MessageCircle className="w-4 h-4 shrink-0" />
+        <span className="hidden sm:inline">WhatsApp Support</span>
+      </a>
+
       {toast && (
         <div
           role="status"
           aria-live="polite"
-          className={`fixed bottom-5 right-5 z-50 max-w-sm px-4 py-3 rounded-xl shadow-lg border text-xs font-semibold ${
+          className={`fixed bottom-20 right-4 z-50 max-w-sm px-4 py-3 rounded-2xl shadow-lg border text-xs font-semibold ${
             toast.tone === 'error'
               ? 'bg-rose-900 text-white border-rose-700'
               : toast.tone === 'success'
-              ? 'bg-emerald-900 text-white border-emerald-700'
-              : 'bg-slate-900 text-white border-slate-700'
+              ? 'bg-[#15803D] text-white border-emerald-700'
+              : 'bg-[#111827] text-white border-slate-700'
           }`}
         >
           {toast.text}

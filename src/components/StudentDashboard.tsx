@@ -1,14 +1,18 @@
 import React, { useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   Bell,
   Building2,
   CheckCircle2,
+  Clock,
   CreditCard,
   Download,
   FileWarning,
   HelpCircle,
   LayoutDashboard,
+  Lock,
   LogOut,
+  MessageCircle,
   PhoneCall,
   RotateCcw,
   Send,
@@ -18,6 +22,11 @@ import { useMarketplace } from '../context/MarketplaceContext';
 import { formatNairaFromKobo } from '../domain/finance';
 import { getUnreadNotificationsCount } from '../domain/notifications';
 import { BookingRecord, DisputeReason } from '../domain/types';
+import {
+  buildStudentToAgentWhatsAppLink,
+  INSPECTION_TIME_SLOTS,
+  isInspectionConfirmationEligible,
+} from '../domain/validation';
 import { NotificationsPanel } from './NotificationsPanel';
 
 type StudentSection =
@@ -31,14 +40,11 @@ type StudentSection =
   | 'support';
 
 const DISPUTE_REASONS: DisputeReason[] = [
-  'Lodge does not exist.',
-  'Agent showed a different property.',
-  'Landlord authorization could not be verified.',
-  'Property differs from advertised photographs.',
-  'Property is not as described.',
-  'Landlord changed the agreed price.',
-  'Property is unavailable.',
-  'Other.',
+  'Agent did not show up',
+  'Lodge is fake',
+  'Caretaker does not know agent',
+  'Lodge already taken',
+  'Agent asked for extra money',
 ];
 
 export function StudentDashboard() {
@@ -60,32 +66,36 @@ export function StudentDashboard() {
   const [section, setSection] = useState<StudentSection>('bookings');
   const [confirmTarget, setConfirmTarget] = useState<BookingRecord | null>(null);
   const [confirmChecked, setConfirmChecked] = useState(false);
+
+  const todayIso = new Date().toISOString().slice(0, 10);
   const [contactTarget, setContactTarget] = useState<BookingRecord | null>(null);
   const [contactName, setContactName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [contactWhatsapp, setContactWhatsapp] = useState('');
-  const [contactTimeSlot, setContactTimeSlot] = useState('Morning (9:00 AM - 12:00 PM)');
+  const [contactDate, setContactDate] = useState(todayIso);
+  const [contactTimeSlot, setContactTimeSlot] = useState<string>(INSPECTION_TIME_SLOTS[0]);
   const [contactMeetup, setContactMeetup] = useState('ABSU Main School Gate');
   const [contactNotes, setContactNotes] = useState('');
+
   const [refundTarget, setRefundTarget] = useState<BookingRecord | null>(null);
   const [refundReason, setRefundReason] = useState<DisputeReason>(DISPUTE_REASONS[0]);
   const [refundDesc, setRefundDesc] = useState('');
-  const [refundDate, setRefundDate] = useState('2026-11-21');
+  const [refundDate, setRefundDate] = useState(todayIso);
   const [refundEvidence, setRefundEvidence] = useState('');
 
   if (!currentUser || currentUser.role !== 'student') {
     return (
       <div className="max-w-3xl mx-auto px-4 py-16 text-center space-y-4">
-        <h1 className="text-2xl font-display font-bold text-slate-900">
+        <h1 className="text-2xl font-display font-bold text-[#111827]">
           Student Dashboard Access
         </h1>
         <p className="text-sm text-slate-600">
-          Sign in with an ABSU Student account to view your private bookings, inspection confirmations, and payment receipts.
+          Sign in with an ABSU Student account to view your bookings, inspection schedules, and 48-hour payment protection.
         </p>
         <button
           type="button"
           onClick={() => setActivePage('home')}
-          className="px-4 py-2 text-sm font-semibold text-white bg-emerald-800 rounded-lg"
+          className="px-5 py-3 min-h-[48px] text-sm font-semibold text-white bg-[#16A34A] hover:bg-[#15803D] rounded-xl"
         >
           Return to Marketplace
         </button>
@@ -93,7 +103,6 @@ export function StudentDashboard() {
     );
   }
 
-  // Strict student isolation: students can access ONLY their own bookings & disputes
   const myBookings = useMemo(
     () => bookings.filter((b) => b.studentUid === currentUser.uid),
     [bookings, currentUser.uid]
@@ -137,7 +146,7 @@ export function StudentDashboard() {
       setRefundDesc('');
       setRefundEvidence('');
     } else {
-      showToast('error', res.error || 'Could not submit dispute.');
+      showToast('error', res.error || 'Could not submit refund request.');
     }
   };
 
@@ -149,6 +158,7 @@ export function StudentDashboard() {
       fullName: contactName,
       phoneNumber: contactPhone,
       whatsappOrAltPhone: contactWhatsapp,
+      preferredDate: contactDate,
       preferredTimeSlot: contactTimeSlot,
       campusMeetupPoint: contactMeetup,
       notesForAgent: contactNotes,
@@ -162,23 +172,24 @@ export function StudentDashboard() {
 
   const downloadReceipt = (bk: BookingRecord) => {
     const content = [
-      'ABSU LODGESAFE — OFFICIAL BOOKING RECEIPT (TEST ENVIRONMENT)',
+      'ABSU LODGE — OFFICIAL BOOKING RECEIPT',
       '==============================================================',
       `Booking Reference: ${bk.bookingReference}`,
       `Student: ${bk.studentName} (${bk.studentMatric})`,
       `Lodge: ${bk.propertyTitle}`,
-      `Axis: ${bk.locationArea}, Uturu`,
-      `Agent: ${bk.agentName}`,
+      `Location: ${bk.locationArea}, Uturu`,
+      `Agent: ${bk.agentName} (${bk.agentPhone || ''})`,
       `Booking Date: ${bk.createdAt.slice(0, 10)}`,
-      `Inspection Date: ${bk.inspectionDate}`,
-      `Status: ${bk.status}`,
+      `Inspection Date: ${bk.inspectionDate} (${bk.inspectionTimeSlot || ''})`,
+      `Booking Status: ${bk.status}`,
+      `Payment Hold Status: ${bk.paymentHoldStatus}`,
       '--------------------------------------------------------------',
-      `Yearly Rent: ${formatNairaFromKobo(bk.breakdown.yearlyRentKobo)}`,
-      `Agent Commission: ${formatNairaFromKobo(bk.breakdown.agentCommissionKobo)}`,
-      `Inspection Fee (Fixed): ${formatNairaFromKobo(bk.breakdown.inspectionFeeKobo)}`,
-      `Total Paid: ${formatNairaFromKobo(bk.breakdown.totalPayableKobo)}`,
+      `Agent Fee Paid Online: ${formatNairaFromKobo(bk.breakdown.agentCommissionKobo)}`,
+      `Inspection Fee Paid Online: ${formatNairaFromKobo(bk.breakdown.inspectionFeeKobo)}`,
+      `Total Booking Fee Paid: ${formatNairaFromKobo(bk.breakdown.totalBookingFeeKobo)}`,
+      `Annual Rent (Pay Direct to Landlord w/ Receipt): ${formatNairaFromKobo(bk.breakdown.yearlyRentKobo)}`,
       bk.confirmedAt ? `Confirmed Timestamp: ${bk.confirmedAt}` : 'Confirmed Timestamp: Pending Inspection',
-      bk.settlementAuthorizationCode ? `Settlement Authorization: ${bk.settlementAuthorizationCode}` : '',
+      bk.settlementAuthorizationCode ? `Settlement Reference: ${bk.settlementAuthorizationCode}` : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -211,17 +222,17 @@ export function StudentDashboard() {
   ];
 
   return (
-    <div className="bg-slate-50 min-h-screen">
+    <div className="bg-slate-50 min-h-screen text-[#111827]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 grid lg:grid-cols-12 gap-6 items-start">
         {/* Sidebar */}
-        <aside className="lg:col-span-3 bg-white border border-slate-200 rounded-xl p-4 space-y-4">
+        <aside className="lg:col-span-3 bg-white border border-slate-200 rounded-2xl p-4 space-y-4">
           <div className="border-b border-slate-100 pb-3">
-            <p className="text-xs font-semibold text-emerald-800">Student Portal</p>
-            <h1 className="text-base font-display font-bold text-slate-900 mt-0.5">
+            <p className="text-xs font-semibold text-[#16A34A]">Student Portal</p>
+            <h1 className="text-base font-display font-bold text-[#111827] mt-0.5">
               {currentUser.fullName}
             </h1>
             <p className="text-xs font-mono text-slate-500">
-              {currentUser.matricNumber || 'ABSU Student'}
+              {currentUser.phone} · {currentUser.matricNumber || 'ABSU Student'}
             </p>
           </div>
           <nav className="space-y-1">
@@ -230,9 +241,9 @@ export function StudentDashboard() {
                 key={item.id}
                 type="button"
                 onClick={() => setSection(item.id)}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm rounded-lg transition-colors text-left ${
+                className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors text-left ${
                   section === item.id
-                    ? 'bg-emerald-800 text-white font-semibold'
+                    ? 'bg-[#16A34A] text-white font-semibold'
                     : 'text-slate-700 hover:bg-slate-100'
                 }`}
               >
@@ -245,7 +256,7 @@ export function StudentDashboard() {
             <button
               type="button"
               onClick={logoutUser}
-              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 rounded-lg transition-colors text-left"
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 rounded-xl transition-colors text-left"
             >
               <LogOut className="w-4 h-4" />
               <span>Log Out</span>
@@ -258,85 +269,84 @@ export function StudentDashboard() {
           {section === 'overview' && (
             <div className="space-y-6">
               <div className="grid sm:grid-cols-3 gap-4">
-                <div className="bg-white border border-slate-200 rounded-xl p-5">
+                <div className="bg-white border border-slate-200 rounded-2xl p-5">
                   <p className="text-xs text-slate-500">My Bookings</p>
-                  <p className="text-2xl font-display font-bold text-slate-900 tabular-nums mt-1">
+                  <p className="text-2xl font-display font-bold text-[#111827] tabular-nums mt-1">
                     {myBookings.length}
                   </p>
                 </div>
-                <div className="bg-white border border-slate-200 rounded-xl p-5">
-                  <p className="text-xs text-slate-500">Awaiting My Inspection</p>
-                  <p className="text-2xl font-display font-bold text-emerald-800 tabular-nums mt-1">
-                    {
-                      myBookings.filter(
-                        (b) =>
-                          b.status === 'Awaiting Inspection' ||
-                          b.status === 'Inspection Scheduled'
-                      ).length
-                    }
+                <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                  <p className="text-xs text-slate-500">Held (Awaiting Inspection)</p>
+                  <p className="text-2xl font-display font-bold text-[#16A34A] tabular-nums mt-1">
+                    {myBookings.filter((b) => b.paymentHoldStatus === 'held').length}
                   </p>
                 </div>
-                <div className="bg-white border border-slate-200 rounded-xl p-5">
-                  <p className="text-xs text-slate-500">Open Refund Requests</p>
-                  <p className="text-2xl font-display font-bold text-slate-900 tabular-nums mt-1">
+                <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                  <p className="text-xs text-slate-500">Refund Requests</p>
+                  <p className="text-2xl font-display font-bold text-[#111827] tabular-nums mt-1">
                     {myDisputes.length}
                   </p>
                 </div>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-3">
-                <h2 className="text-lg font-display font-bold text-slate-900">
-                  Your Inspection Workflow
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-3">
+                <h2 className="text-lg font-display font-bold text-[#111827]">
+                  Your 48-Hour Inspection Protection
                 </h2>
                 <p className="text-sm text-slate-600 leading-relaxed">
-                  Visit your booked lodge on the scheduled inspection date. Once satisfied, open My Bookings and click <strong>Confirm Lodge &amp; Release Funds</strong>. If anything differs from what was advertised, click <strong>Request Refund</strong> immediately.
+                  Only your Agent Fee + ₦3,000 Inspection Fee are held safely for 48 hours. After your physical inspection starts, click{' '}
+                  <strong>CONFIRM — I am okay with this lodge</strong> to release funds, or click{' '}
+                  <strong>REFUND — Agent tried to scam me</strong> immediately to freeze splits and get a full refund.
                 </p>
                 <button
                   type="button"
                   onClick={() => setSection('bookings')}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-800 rounded-lg hover:bg-emerald-900"
+                  className="px-5 py-3 min-h-[48px] text-xs font-bold text-white bg-[#16A34A] hover:bg-[#15803D] rounded-xl"
                 >
-                  Go to My Bookings
+                  Open My Bookings
                 </button>
               </div>
             </div>
           )}
 
           {section === 'browse' && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-display font-bold text-slate-900">
-                  SUG Verified Lodges Available Now
+                <h2 className="text-lg font-display font-bold text-[#111827]">
+                  SUG Approved Lodges Available Now
                 </h2>
                 <button
                   type="button"
                   onClick={() => setActivePage('home')}
-                  className="text-xs font-semibold text-emerald-800 underline"
+                  className="text-xs font-semibold text-[#16A34A] underline"
                 >
                   Open Full Marketplace Filters
                 </button>
               </div>
               <div className="grid sm:grid-cols-2 gap-4">
                 {properties
-                  .filter((p) => p.verificationStatus === 'SUG Verified')
+                  .filter(
+                    (p) =>
+                      p.lodgeStatus === 'Approved' || p.verificationStatus === 'SUG Verified'
+                  )
                   .map((p) => (
                     <div
                       key={p.propertyId}
-                      className="border border-slate-200 rounded-xl p-4 flex items-center justify-between gap-4"
+                      className="border border-slate-200 rounded-2xl p-4 flex items-center justify-between gap-4"
                     >
                       <div className="space-y-1">
                         <p className="text-xs text-slate-500">
                           {p.locationArea} · {p.category}
                         </p>
-                        <p className="text-sm font-semibold text-slate-900">{p.title}</p>
-                        <p className="text-sm font-mono font-bold text-emerald-900 tabular-nums">
+                        <p className="text-sm font-semibold text-[#111827]">{p.title}</p>
+                        <p className="text-sm font-mono font-bold text-[#16A34A] tabular-nums">
                           {formatNairaFromKobo(p.yearlyRentKobo)} / yr
                         </p>
                       </div>
                       <button
                         type="button"
                         onClick={() => openPropertyDetails(p.propertyId)}
-                        className="px-3 py-2 text-xs font-semibold text-white bg-emerald-800 rounded-lg shrink-0"
+                        className="px-4 py-2.5 text-xs font-semibold text-white bg-[#16A34A] hover:bg-[#15803D] rounded-xl shrink-0"
                       >
                         View
                       </button>
@@ -349,21 +359,21 @@ export function StudentDashboard() {
           {section === 'bookings' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-xl font-display font-bold text-slate-900">
+                <h2 className="text-xl font-display font-bold text-[#111827]">
                   My Bookings &amp; Physical Inspection Decisions
                 </h2>
               </div>
 
               {myBookings.length === 0 ? (
-                <div className="bg-white border border-slate-200 rounded-xl p-8 text-center space-y-3">
-                  <p className="text-base font-semibold text-slate-900">No bookings yet</p>
+                <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-3">
+                  <p className="text-base font-semibold text-[#111827]">No bookings yet</p>
                   <p className="text-sm text-slate-600">
-                    Browse SUG-verified lodges and schedule a physical inspection.
+                    Browse SUG-approved lodges and schedule a physical inspection.
                   </p>
                   <button
                     type="button"
                     onClick={() => setActivePage('home')}
-                    className="px-4 py-2 text-xs font-semibold text-white bg-emerald-800 rounded-lg"
+                    className="px-5 py-3 min-h-[48px] text-xs font-bold text-white bg-[#16A34A] hover:bg-[#15803D] rounded-xl"
                   >
                     Browse Lodges
                   </button>
@@ -371,13 +381,17 @@ export function StudentDashboard() {
               ) : (
                 myBookings.map((bk) => {
                   const awaitingDecision =
-                    bk.paymentStatus === 'Test Paid' &&
+                    bk.paymentHoldStatus === 'held' &&
                     (bk.status === 'Awaiting Inspection' || bk.status === 'Inspection Scheduled');
+                  const gate = isInspectionConfirmationEligible(
+                    bk.inspectionDate,
+                    bk.inspectionTimeSlot
+                  );
 
                   return (
                     <article
                       key={bk.bookingId}
-                      className="bg-white border border-slate-200 rounded-xl p-5 space-y-4"
+                      className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4 shadow-sm"
                     >
                       <div className="flex flex-col sm:flex-row gap-4 justify-between">
                         <div className="flex gap-4">
@@ -385,7 +399,7 @@ export function StudentDashboard() {
                             src={bk.propertyCoverUrl}
                             alt={bk.propertyTitle}
                             referrerPolicy="no-referrer"
-                            className="w-24 h-20 rounded-lg object-cover border border-slate-200 shrink-0"
+                            className="w-24 h-20 rounded-xl object-cover border border-slate-200 shrink-0"
                           />
                           <div className="space-y-1">
                             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 font-mono">
@@ -393,41 +407,46 @@ export function StudentDashboard() {
                               <span>·</span>
                               <span>Booked {bk.createdAt.slice(0, 10)}</span>
                               <span>·</span>
-                              <span>Inspection {bk.inspectionDate}</span>
+                              <span>
+                                Inspection {bk.inspectionDate}
+                                {bk.inspectionTimeSlot ? ` (${bk.inspectionTimeSlot})` : ''}
+                              </span>
                             </div>
-                            <h3 className="text-base font-display font-bold text-slate-900">
+                            <h3 className="text-base font-display font-bold text-[#111827]">
                               {bk.propertyTitle}
                             </h3>
                             <p className="text-xs text-slate-600">
-                              Agent: <strong>{bk.agentName}</strong> · Axis: {bk.locationArea}
+                              Agent: <strong>{bk.agentName}</strong> · {bk.locationArea}, Uturu
                             </p>
                           </div>
                         </div>
 
                         <div className="sm:text-right space-y-1 shrink-0">
-                          <p className="text-xs text-slate-500">Amount Paid (Test)</p>
-                          <p className="text-lg font-mono font-bold text-slate-900 tabular-nums">
-                            {formatNairaFromKobo(bk.breakdown.totalPayableKobo)}
+                          <p className="text-xs text-slate-500">Booking Fee Paid</p>
+                          <p className="text-lg font-mono font-bold text-[#111827] tabular-nums">
+                            {formatNairaFromKobo(bk.breakdown.totalBookingFeeKobo)}
                           </p>
-                          <p className="text-xs font-semibold text-emerald-800">
-                            Status: {bk.status}
+                          <p className="text-xs font-semibold text-[#16A34A]">
+                            {bk.status} ({bk.paymentStatus})
                           </p>
                         </div>
                       </div>
 
                       <div className="grid sm:grid-cols-4 gap-3 pt-3 border-t border-slate-100 text-xs">
                         <div>
-                          <span className="text-slate-500">Payment Status:</span>{' '}
-                          <strong className="text-slate-800">{bk.paymentStatus}</strong>
+                          <span className="text-slate-500">Payment Hold:</span>{' '}
+                          <strong className="uppercase">{bk.paymentHoldStatus.replace('_', ' ')}</strong>
                         </div>
                         <div>
-                          <span className="text-slate-500">Inspection Status:</span>{' '}
-                          <strong className="text-slate-800">{bk.inspectionStatus}</strong>
-                        </div>
-                        <div>
-                          <span className="text-slate-500">Rent:</span>{' '}
+                          <span className="text-slate-500">Annual Rent (Direct):</span>{' '}
                           <strong className="font-mono tabular-nums">
                             {formatNairaFromKobo(bk.breakdown.yearlyRentKobo)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-500">Agent Fee:</span>{' '}
+                          <strong className="font-mono tabular-nums">
+                            {formatNairaFromKobo(bk.breakdown.agentCommissionKobo)}
                           </strong>
                         </div>
                         <div>
@@ -438,11 +457,60 @@ export function StudentDashboard() {
                         </div>
                       </div>
 
+                      {bk.splitAt && awaitingDecision && (
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-700 flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-[#16A34A] shrink-0" />
+                          <span>
+                            48-Hour Payment Protection: Funds auto-split on{' '}
+                            <strong className="font-mono">
+                              {bk.splitAt.slice(0, 16).replace('T', ' ')} UTC
+                            </strong>{' '}
+                            unless you confirm earlier or request a refund.
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Agent Call & WhatsApp Direct Actions */}
+                      <div className="flex flex-wrap items-center justify-between gap-3 bg-green-50/60 border border-green-200 rounded-xl p-3.5 text-xs">
+                        <div>
+                          <p className="font-bold text-[#111827]">
+                            Agent: {bk.agentName} ({bk.agentPhone || '+2348067743102'})
+                          </p>
+                          <p className="text-slate-600">
+                            REMINDER: Get receipt before paying rent directly to landlord/caretaker.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <a
+                            href={`tel:${bk.agentPhone || '+2348067743102'}`}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-[#16A34A] hover:bg-[#15803D] text-white font-semibold rounded-xl"
+                          >
+                            <PhoneCall className="w-3.5 h-3.5" />
+                            <span>Call Agent</span>
+                          </a>
+                          <a
+                            href={buildStudentToAgentWhatsAppLink({
+                              agentPhone: bk.agentPhone || '+2348067743102',
+                              agentName: bk.agentName,
+                              lodgeTitle: bk.propertyTitle,
+                              bookingReference: bk.bookingReference,
+                              inspectionDate: bk.inspectionDate,
+                            })}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-green-300 text-[#15803D] font-semibold rounded-xl hover:bg-green-50"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            <span>WhatsApp</span>
+                          </a>
+                        </div>
+                      </div>
+
                       {bk.inspectionContact ? (
-                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 text-xs space-y-1">
-                          <p className="font-semibold text-emerald-900 flex items-center gap-1.5">
-                            <PhoneCall className="w-3.5 h-3.5 text-emerald-700" />
-                            <span>Inspection Contact Sent to {bk.agentName}</span>
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs space-y-1">
+                          <p className="font-semibold text-[#15803D] flex items-center gap-1.5">
+                            <PhoneCall className="w-3.5 h-3.5" />
+                            <span>Your Boarding Info Sent to {bk.agentName}</span>
                           </p>
                           <p className="text-slate-700">
                             <strong>{bk.inspectionContact.fullName}</strong> ·{' '}
@@ -461,9 +529,9 @@ export function StudentDashboard() {
                         </div>
                       ) : (
                         awaitingDecision && (
-                          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2">
+                          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2">
                             <span>
-                              Add your contact details so <strong>{bk.agentName}</strong> knows how to reach you for this inspection.
+                              Add your contact details so <strong>{bk.agentName}</strong> knows how to reach you for inspection.
                             </span>
                             <button
                               type="button"
@@ -471,47 +539,59 @@ export function StudentDashboard() {
                                 setContactTarget(bk);
                                 setContactName(currentUser.fullName);
                                 setContactPhone(currentUser.phone);
-                                setContactWhatsapp('');
+                                setContactWhatsapp(currentUser.whatsappNumber || currentUser.phone);
+                                setContactDate(bk.inspectionDate || todayIso);
                                 setContactNotes('');
                               }}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-800 text-white font-semibold rounded-lg hover:bg-emerald-900"
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#16A34A] text-white font-semibold rounded-xl hover:bg-[#15803D]"
                             >
                               <Send className="w-3.5 h-3.5" />
-                              <span>Send Contact Info to Agent</span>
+                              <span>Complete Boarding Form</span>
                             </button>
                           </div>
                         )
                       )}
 
                       {awaitingDecision && (
-                        <div className="pt-3 border-t border-slate-100 flex flex-wrap gap-3">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setConfirmTarget(bk);
-                              setConfirmChecked(false);
-                            }}
-                            className="px-4 py-2.5 bg-emerald-800 text-white text-xs font-semibold rounded-lg hover:bg-emerald-900"
-                          >
-                            Confirm Lodge &amp; Release Funds
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRefundTarget(bk);
-                              setRefundDate(bk.inspectionDate);
-                            }}
-                            className="px-4 py-2.5 bg-rose-50 text-rose-800 border border-rose-200 text-xs font-semibold rounded-lg hover:bg-rose-100"
-                          >
-                            Request Refund
-                          </button>
+                        <div className="pt-3 border-t border-slate-100 space-y-2">
+                          {!gate.eligible && (
+                            <p className="text-xs text-slate-600 flex items-center gap-1.5">
+                              <Lock className="w-3.5 h-3.5 text-amber-600" />
+                              <span>
+                                <strong>CONFIRM</strong> unlocks at your scheduled inspection time ({gate.unlocksAtLabel}). You can request a refund anytime if an issue occurs.
+                              </span>
+                            </p>
+                          )}
+                          <div className="flex flex-col sm:flex-row gap-3">
+                            <button
+                              type="button"
+                              disabled={!gate.eligible}
+                              onClick={() => {
+                                setConfirmTarget(bk);
+                                setConfirmChecked(false);
+                              }}
+                              className="min-h-[48px] px-5 py-3 bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-bold rounded-xl disabled:opacity-45 disabled:cursor-not-allowed"
+                            >
+                              CONFIRM — I am okay with this lodge
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRefundTarget(bk);
+                                setRefundDate(bk.inspectionDate);
+                              }}
+                              className="min-h-[48px] px-5 py-3 bg-rose-50 text-rose-800 border border-rose-200 text-xs font-bold rounded-xl hover:bg-rose-100"
+                            >
+                              REFUND — Agent tried to scam me
+                            </button>
+                          </div>
                         </div>
                       )}
 
                       {bk.confirmedAt && (
-                        <div className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-xs text-[#15803D] bg-green-50 border border-green-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
                           <span>
-                            Confirmed on {bk.confirmedAt.slice(0, 16).replace('T', ' ')} · Auth:{' '}
+                            Confirmed on {bk.confirmedAt.slice(0, 16).replace('T', ' ')} · Ref:{' '}
                             <span className="font-mono">{bk.settlementAuthorizationCode}</span>
                           </span>
                           <button
@@ -532,8 +612,8 @@ export function StudentDashboard() {
           )}
 
           {section === 'payments' && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-              <h2 className="text-lg font-display font-bold text-slate-900">
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+              <h2 className="text-lg font-display font-bold text-[#111827]">
                 Payment History &amp; Receipts
               </h2>
               <div className="overflow-x-auto">
@@ -542,8 +622,8 @@ export function StudentDashboard() {
                     <tr className="border-b border-slate-200 text-slate-500">
                       <th className="py-2 pr-4">Reference</th>
                       <th className="py-2 pr-4">Lodge</th>
-                      <th className="py-2 pr-4">Total Paid</th>
-                      <th className="py-2 pr-4">Status</th>
+                      <th className="py-2 pr-4">Booking Fee Paid</th>
+                      <th className="py-2 pr-4">Hold Status</th>
                       <th className="py-2 text-right">Receipt</th>
                     </tr>
                   </thead>
@@ -551,16 +631,16 @@ export function StudentDashboard() {
                     {myBookings.map((bk) => (
                       <tr key={bk.bookingId}>
                         <td className="py-3 pr-4 font-mono">{bk.bookingReference}</td>
-                        <td className="py-3 pr-4 font-medium text-slate-900">{bk.propertyTitle}</td>
+                        <td className="py-3 pr-4 font-medium text-[#111827]">{bk.propertyTitle}</td>
                         <td className="py-3 pr-4 font-mono tabular-nums">
-                          {formatNairaFromKobo(bk.breakdown.totalPayableKobo)}
+                          {formatNairaFromKobo(bk.breakdown.totalBookingFeeKobo)}
                         </td>
-                        <td className="py-3 pr-4">{bk.status}</td>
+                        <td className="py-3 pr-4">{bk.paymentStatus}</td>
                         <td className="py-3 text-right">
                           <button
                             type="button"
                             onClick={() => downloadReceipt(bk)}
-                            className="inline-flex items-center gap-1 text-emerald-800 font-semibold hover:underline"
+                            className="inline-flex items-center gap-1 text-[#16A34A] font-semibold hover:underline"
                           >
                             <Download className="w-3.5 h-3.5" />
                             <span>Receipt</span>
@@ -575,27 +655,27 @@ export function StudentDashboard() {
           )}
 
           {section === 'refunds' && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-              <h2 className="text-lg font-display font-bold text-slate-900">
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+              <h2 className="text-lg font-display font-bold text-[#111827]">
                 My Refund Requests
               </h2>
               {myDisputes.length === 0 ? (
                 <p className="text-sm text-slate-600">
-                  You have no active refund disputes.
+                  You have no active refund requests.
                 </p>
               ) : (
                 <div className="space-y-3">
                   {myDisputes.map((d) => (
-                    <div key={d.disputeId} className="border border-slate-200 rounded-lg p-4 space-y-2">
+                    <div key={d.disputeId} className="border border-slate-200 rounded-2xl p-4 space-y-2">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-mono text-slate-500">{d.bookingReference}</span>
                         <span className="font-semibold text-amber-800">{d.status}</span>
                       </div>
-                      <p className="text-sm font-semibold text-slate-900">{d.reason}</p>
+                      <p className="text-sm font-semibold text-[#111827]">{d.reason}</p>
                       <p className="text-xs text-slate-600">{d.description}</p>
                       {d.resolutionNote && (
-                        <p className="text-xs text-emerald-900 bg-emerald-50 p-2 rounded">
-                          SUG Decision Note: {d.resolutionNote}
+                        <p className="text-xs text-[#15803D] bg-green-50 p-2.5 rounded-xl">
+                          Resolution Note: {d.resolutionNote}
                         </p>
                       )}
                     </div>
@@ -620,20 +700,20 @@ export function StudentDashboard() {
           )}
 
           {section === 'profile' && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
                 <div>
-                  <h2 className="text-lg font-display font-bold text-slate-900">
+                  <h2 className="text-lg font-display font-bold text-[#111827]">
                     ABSU Student Profile
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Verified student account details and active session controls.
+                    Your student contact &amp; account session details.
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={logoutUser}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors"
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100 transition-colors"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   <span>Log Out</span>
@@ -642,46 +722,51 @@ export function StudentDashboard() {
               <dl className="grid sm:grid-cols-2 gap-4 text-sm">
                 <div>
                   <dt className="text-xs text-slate-500">Full Name</dt>
-                  <dd className="font-semibold text-slate-900">{currentUser.fullName}</dd>
+                  <dd className="font-semibold text-[#111827]">{currentUser.fullName}</dd>
                 </div>
                 <div>
                   <dt className="text-xs text-slate-500">Matriculation Number</dt>
-                  <dd className="font-mono font-semibold text-slate-900">
-                    {currentUser.matricNumber || 'Not set'}
+                  <dd className="font-mono font-semibold text-[#111827]">
+                    {currentUser.matricNumber || 'Not provided'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">Phone</dt>
+                  <dd className="font-mono text-slate-800">{currentUser.phone}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">WhatsApp</dt>
+                  <dd className="font-mono text-slate-800">
+                    {currentUser.whatsappNumber || currentUser.phone}
                   </dd>
                 </div>
                 <div>
                   <dt className="text-xs text-slate-500">Email</dt>
-                  <dd className="text-slate-800">{currentUser.email}</dd>
+                  <dd className="text-slate-800">{currentUser.email || 'Optional'}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-slate-500">Phone</dt>
-                  <dd className="text-slate-800">{currentUser.phone}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-slate-500">Faculty</dt>
-                  <dd className="text-slate-800">{currentUser.faculty || 'Physical Sciences'}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-slate-500">Department</dt>
-                  <dd className="text-slate-800">{currentUser.department || 'Computer Science'}</dd>
+                  <dt className="text-xs text-slate-500">Faculty / Dept</dt>
+                  <dd className="text-slate-800">
+                    {currentUser.faculty || 'ABSU Uturu'} · {currentUser.department || 'General'}
+                  </dd>
                 </div>
               </dl>
             </div>
           )}
 
           {section === 'support' && (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-3">
-              <h2 className="text-lg font-display font-bold text-slate-900">
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-3">
+              <h2 className="text-lg font-display font-bold text-[#111827]">
                 SUG Student Accommodation Support
               </h2>
               <p className="text-sm text-slate-600">
-                Need immediate help during an Uturu inspection? Visit the SUG Secretariat Accommodation Desk or email <span className="font-mono">support@absulodgesafe.ng</span>.
+                Need immediate help during an Uturu inspection? Use the floating WhatsApp Support button, visit the SUG Secretariat Accommodation Desk, or email{' '}
+                <span className="font-mono">support@absulodgesafe.ng</span>.
               </p>
               <button
                 type="button"
                 onClick={() => setActivePage('policies')}
-                className="px-4 py-2 text-xs font-semibold text-emerald-900 bg-emerald-100 rounded-lg"
+                className="px-4 py-2.5 text-xs font-semibold text-[#15803D] bg-green-50 border border-green-200 rounded-xl"
               >
                 Read Student &amp; Refund Policies
               </button>
@@ -693,32 +778,36 @@ export function StudentDashboard() {
       {/* Explicit Confirmation Dialogue */}
       {confirmTarget && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl max-w-md w-full p-6 space-y-4 border border-slate-200">
-            <h3 className="text-lg font-display font-bold text-slate-900">
-              Confirm Lodge &amp; Release Funds
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 border border-slate-200">
+            <h3 className="text-lg font-display font-bold text-[#111827]">
+              CONFIRM — I am okay with this lodge
             </h3>
             <p className="text-xs text-slate-500 font-mono">
               Booking: {confirmTarget.bookingReference} · {confirmTarget.propertyTitle}
             </p>
-            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3.5 text-sm text-emerald-950 leading-relaxed">
-              "I have physically inspected this accommodation, verified the agreed property and accept the lodge under the booking terms."
+            <div className="bg-green-50 border border-green-200 rounded-xl p-3.5 text-sm text-[#111827] leading-relaxed">
+              &quot;I have physically inspected this accommodation, verified the landlord/caretaker authorization, and authorize release of the held booking fee splits (40% Agent / 35% SUG / 25% Platform).&quot;
             </div>
-            <label className="flex items-start gap-2.5 text-xs font-medium text-slate-800 cursor-pointer">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-950 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <span>Remember: Always collect an official lodge receipt when paying annual rent directly to the landlord or caretaker.</span>
+            </div>
+            <label className="flex items-start gap-2.5 text-xs font-semibold text-[#111827] cursor-pointer">
               <input
                 type="checkbox"
                 checked={confirmChecked}
                 onChange={(e) => setConfirmChecked(e.target.checked)}
-                className="mt-0.5 accent-emerald-800"
+                className="mt-0.5 accent-[#16A34A]"
               />
               <span>
-                I explicitly confirm physical inspection and authorize conditional settlement release.
+                I confirm physical inspection and authorize fund release.
               </span>
             </label>
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setConfirmTarget(null)}
-                className="px-4 py-2 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg"
+                className="px-4 py-2.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-xl"
               >
                 Cancel
               </button>
@@ -726,41 +815,42 @@ export function StudentDashboard() {
                 type="button"
                 disabled={!confirmChecked}
                 onClick={handleConfirmSubmit}
-                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 disabled:opacity-40"
+                className="px-4 py-2.5 text-xs font-bold text-white bg-[#16A34A] hover:bg-[#15803D] rounded-xl disabled:opacity-40"
               >
-                Confirm &amp; Release Settlement
+                Confirm &amp; Release Funds
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Request Refund Complaint Screen */}
+      {/* Request Refund Complaint Modal */}
       {refundTarget && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto">
           <form
             onSubmit={handleRefundSubmit}
-            className="bg-white rounded-xl max-w-lg w-full p-6 space-y-4 border border-slate-200 my-8"
+            className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 border border-slate-200 my-8"
           >
             <div className="flex items-center gap-2 text-rose-800">
               <FileWarning className="w-5 h-5" />
-              <h3 className="text-lg font-display font-bold text-slate-900">
-                Request Refund — Submit SUG Complaint
+              <h3 className="text-lg font-display font-bold text-[#111827]">
+                REFUND — Agent tried to scam me
               </h3>
             </div>
             <p className="text-xs text-slate-500 font-mono">
-              Booking: {refundTarget.bookingReference} · {refundTarget.propertyTitle}
+              Booking: {refundTarget.bookingReference} · Amount to Refund:{' '}
+              {formatNairaFromKobo(refundTarget.breakdown.totalBookingFeeKobo)}
             </p>
 
             <div>
               <label htmlFor="refund-reason" className="block text-xs font-medium text-slate-700 mb-1">
-                Select Reason
+                Select Fraud / Inspection Issue Reason
               </label>
               <select
                 id="refund-reason"
                 value={refundReason}
                 onChange={(e) => setRefundReason(e.target.value as DisputeReason)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white"
+                className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl bg-white"
               >
                 {DISPUTE_REASONS.map((r) => (
                   <option key={r} value={r}>
@@ -781,7 +871,7 @@ export function StudentDashboard() {
                   required
                   value={refundDate}
                   onChange={(e) => setRefundDate(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                  className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl"
                 />
               </div>
               <div>
@@ -793,14 +883,14 @@ export function StudentDashboard() {
                   type="file"
                   accept=".jpg,.jpeg,.png,.webp,.mp4,.pdf"
                   onChange={(e) => setRefundEvidence(e.target.files?.[0]?.name || '')}
-                  className="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-2.5 file:rounded file:border-0 file:bg-slate-100 file:text-slate-700"
+                  className="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-2.5 file:rounded-lg file:border-0 file:bg-slate-100 file:text-slate-700"
                 />
               </div>
             </div>
 
             <div>
               <label htmlFor="refund-desc" className="block text-xs font-medium text-slate-700 mb-1">
-                Complaint Description
+                Describe What Happened
               </label>
               <textarea
                 id="refund-desc"
@@ -809,7 +899,7 @@ export function StudentDashboard() {
                 value={refundDesc}
                 onChange={(e) => setRefundDesc(e.target.value)}
                 placeholder="Explain clearly what occurred during the physical inspection..."
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
               />
             </div>
 
@@ -817,15 +907,15 @@ export function StudentDashboard() {
               <button
                 type="button"
                 onClick={() => setRefundTarget(null)}
-                className="px-4 py-2 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg"
+                className="px-4 py-2.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-xl"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 text-xs font-semibold text-white bg-rose-700 rounded-lg hover:bg-rose-800"
+                className="px-4 py-2.5 text-xs font-bold text-white bg-rose-700 rounded-xl hover:bg-rose-800"
               >
-                Submit Complaint to SUG
+                Freeze Splits &amp; Request Full Refund
               </button>
             </div>
           </form>
@@ -837,15 +927,14 @@ export function StudentDashboard() {
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto">
           <form
             onSubmit={handleInspectionContactSubmit}
-            className="bg-white rounded-xl max-w-lg w-full p-6 space-y-4 border border-slate-200 my-8"
+            className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 border border-slate-200 my-8"
           >
             <div>
-              <h3 className="text-lg font-display font-bold text-slate-900">
-                Send Inspection Contact Info to Agent
+              <h3 className="text-lg font-display font-bold text-[#111827]">
+                Complete Boarding Form for {contactTarget.agentName}
               </h3>
               <p className="text-xs text-slate-500 mt-1">
-                Booking <span className="font-mono">{contactTarget.bookingReference}</span> · Agent:{' '}
-                <strong>{contactTarget.agentName}</strong>
+                Booking <span className="font-mono">{contactTarget.bookingReference}</span>
               </p>
             </div>
             <div className="grid sm:grid-cols-2 gap-3">
@@ -855,7 +944,7 @@ export function StudentDashboard() {
                   required
                   value={contactName}
                   onChange={(e) => setContactName(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
                 />
               </div>
               <div>
@@ -864,17 +953,31 @@ export function StudentDashboard() {
                   required
                   value={contactPhone}
                   onChange={(e) => setContactPhone(e.target.value)}
-                  className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg"
+                  className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-xl"
                 />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
-                  WhatsApp / Alt Phone
+                  WhatsApp Number
                 </label>
                 <input
+                  required
                   value={contactWhatsapp}
                   onChange={(e) => setContactWhatsapp(e.target.value)}
-                  className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg"
+                  className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Inspection Date
+                </label>
+                <input
+                  type="date"
+                  min={todayIso}
+                  required
+                  value={contactDate}
+                  onChange={(e) => setContactDate(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
                 />
               </div>
               <div>
@@ -884,28 +987,30 @@ export function StudentDashboard() {
                 <select
                   value={contactTimeSlot}
                   onChange={(e) => setContactTimeSlot(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white"
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white"
                 >
-                  <option value="Morning (9:00 AM - 12:00 PM)">Morning (9:00 AM - 12:00 PM)</option>
-                  <option value="Afternoon (12:00 PM - 3:00 PM)">Afternoon (12:00 PM - 3:00 PM)</option>
-                  <option value="Late Afternoon (3:00 PM - 5:30 PM)">Late Afternoon (3:00 PM - 5:30 PM)</option>
+                  {INSPECTION_TIME_SLOTS.map((slot) => (
+                    <option key={slot} value={slot}>
+                      {slot}
+                    </option>
+                  ))}
                 </select>
               </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                Campus Meetup Point
-              </label>
-              <select
-                value={contactMeetup}
-                onChange={(e) => setContactMeetup(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white"
-              >
-                <option value="ABSU Main School Gate">ABSU Main School Gate</option>
-                <option value="Back Gate Junction">Back Gate Junction</option>
-                <option value="SUG Secretariat Front">SUG Secretariat Front</option>
-                <option value="Direct at Lodge Axis (Uturu)">Direct at Lodge Axis (Uturu)</option>
-              </select>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Campus Meetup Point
+                </label>
+                <select
+                  value={contactMeetup}
+                  onChange={(e) => setContactMeetup(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white"
+                >
+                  <option value="ABSU Main School Gate">ABSU Main School Gate</option>
+                  <option value="ABSU Gate Junction">ABSU Gate Junction</option>
+                  <option value="Okigwe Road Junction">Okigwe Road Junction</option>
+                  <option value="Direct at Lodge Axis (Uturu)">Direct at Lodge Axis (Uturu)</option>
+                </select>
+              </div>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">
@@ -915,20 +1020,20 @@ export function StudentDashboard() {
                 rows={2}
                 value={contactNotes}
                 onChange={(e) => setContactNotes(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
               />
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setContactTarget(null)}
-                className="px-4 py-2 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg"
+                className="px-4 py-2.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-xl"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-800 rounded-lg hover:bg-emerald-900"
+                className="px-4 py-2.5 text-xs font-bold text-white bg-[#16A34A] rounded-xl hover:bg-[#15803D]"
               >
                 Send to {contactTarget.agentName}
               </button>

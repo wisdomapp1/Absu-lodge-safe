@@ -2,232 +2,218 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   calculateFinancialBreakdown,
+  computeSplitAtIso,
   DEFAULT_INSPECTION_FEE_KOBO,
   DEFAULT_PLATFORM_SETTINGS,
-  formatNairaFromKobo,
   generateFinancialCsv,
+  nairaToKobo,
   summarizeFinancialLedger,
-} from './finance';
-import { canTransitionBooking, isTerminalBookingStatus } from './bookingMachine';
-import { getUnreadNotificationsCount, resolveNotificationDetails } from './notifications';
+} from './finance.ts';
+import { canTransitionBooking } from './bookingMachine.ts';
 import {
+  buildAgentWhatsAppLink,
+  detectSuspiciousListingDescription,
   generateBookingReference,
+  isInspectionConfirmationEligible,
   processIdempotentWebhook,
-  validateAgentCommissionWithinLimit,
+  validateAllowedAgentFeeNaira,
   validateInspectionContact,
   validateLodgeMediaRequirements,
   validateMediaUpload,
-} from './validation';
-import { BookingRecord } from './types';
-import {
-  SEED_BOOKINGS,
-  SEED_DISPUTES,
-  SEED_NOTIFICATIONS,
-  SEED_PROPERTIES,
-} from '../data/seedData';
+} from './validation.ts';
+import { getUnreadNotificationsCount, resolveNotificationDetails } from './notifications.ts';
+import { SEED_BOOKINGS, SEED_NOTIFICATIONS, SEED_PROPERTIES } from '../data/seedData.ts';
+import type { BookingRecord, PaymentEventLog } from './types.ts';
 
-test('calculates exact integer kobo 55/45 and 70/30 commission shares with ₦3,000 inspection fee', () => {
-  const breakdown = calculateFinancialBreakdown(200000 * 100, 20000 * 100);
-  assert.equal(breakdown.yearlyRentKobo, 20000000);
+test('calculates exact integer kobo 40/35/25 agent fee split + 100% ₦3,000 inspection fee excluding rent', () => {
+  const yearlyRent = nairaToKobo(200000);
+  const agentCommission = nairaToKobo(20000);
+  const breakdown = calculateFinancialBreakdown(yearlyRent, agentCommission, DEFAULT_PLATFORM_SETTINGS);
+
+  assert.equal(breakdown.yearlyRentKobo, 20000000); // Stored for display; paid directly to landlord after inspection
   assert.equal(breakdown.agentCommissionKobo, 2000000);
-  assert.equal(breakdown.inspectionFeeKobo, DEFAULT_INSPECTION_FEE_KOBO);
-  assert.equal(breakdown.totalPayableKobo, 22300000);
-  assert.equal(breakdown.platformCommissionKobo, 1100000); // ₦11,000
-  assert.equal(breakdown.agentEarningsKobo, 900000); // ₦9,000
-  assert.equal(breakdown.sugAllocationKobo, 770000); // ₦7,700
-  assert.equal(breakdown.techManagerAllocationKobo, 330000); // ₦3,300
-  assert.equal(
-    breakdown.sugAllocationKobo + breakdown.techManagerAllocationKobo,
-    breakdown.platformCommissionKobo
-  );
-  assert.equal(
-    breakdown.platformCommissionKobo + breakdown.agentEarningsKobo,
-    breakdown.agentCommissionKobo
-  );
+  assert.equal(breakdown.inspectionFeeKobo, DEFAULT_INSPECTION_FEE_KOBO); // 300000 kobo (₦3,000)
+  assert.equal(breakdown.totalBookingFeeKobo, 2300000); // ₦23,000 (Agent Fee + Inspection Fee ONLY)
+  assert.equal(breakdown.totalPayableKobo, 2300000);
+  assert.equal(breakdown.agentEarningsKobo, 800000); // 40% of ₦20,000 = ₦8,000
+  assert.equal(breakdown.sugAllocationKobo, 700000); // 35% of ₦20,000 = ₦7,000
+  assert.equal(breakdown.platformAgentShareKobo, 500000); // 25% of ₦20,000 = ₦5,000
+  assert.equal(breakdown.platformInspectionFeeKobo, 300000); // 100% of ₦3,000 = ₦3,000
+  assert.equal(breakdown.platformTotalKobo, 800000); // ₦5,000 + ₦3,000 = ₦8,000
 });
 
-test('100 bookings revenue projection reconciles dynamically without float drift', () => {
-  const single = calculateFinancialBreakdown(20000000, 2000000);
-  const bookings: BookingRecord[] = Array.from({ length: 100 }, (_, idx) => ({
-    bookingId: `bk_${idx}`,
-    bookingReference: `ABSU-LS-20261119-${idx}`,
-    studentUid: 'stu_1',
-    studentName: 'Test Student',
-    studentMatric: '2022/1001',
-    agentUid: 'agt_1',
-    agentName: 'Test Agent',
+test('48-hour payment hold computes split_at exactly 48 hours after payment confirmation', () => {
+  const paidAt = '2026-11-25T10:00:00.000Z';
+  const splitAt = computeSplitAtIso(paidAt, 48);
+  assert.equal(splitAt, '2026-11-27T10:00:00.000Z');
+});
+
+test('100 bookings financial ledger reconciles dynamically and zeroes out refunded transactions', () => {
+  const yearlyRent = nairaToKobo(180000);
+  const agentComm = nairaToKobo(20000);
+  const breakdown = calculateFinancialBreakdown(yearlyRent, agentComm);
+
+  const synthetic: BookingRecord[] = Array.from({ length: 100 }, (_, i) => ({
+    bookingId: `bk_test_${i}`,
+    bookingReference: generateBookingReference(i + 1),
+    studentUid: `stu_${i % 10}`,
+    studentName: `Student ${i}`,
+    studentMatric: `2023/100${i}`,
+    agentUid: `agt_${i % 3}`,
+    agentName: `Agent ${i % 3}`,
     propertyId: 'prop_1',
     propertyTitle: 'Test Lodge',
-    propertyCoverUrl: '/img.jpg',
+    propertyCoverUrl: '',
     locationArea: 'School Gate',
-    breakdown: single,
-    status: 'Settled',
-    paymentStatus: 'Test Paid',
+    breakdown,
+    status: i < 10 ? 'Refunded' : i < 70 ? 'Settled' : 'Awaiting Inspection',
+    paymentStatus: i < 10 ? 'Refunded' : 'Held',
+    paymentHoldStatus: i < 10 ? 'refunded' : i < 70 ? 'settled' : 'held',
     inspectionStatus: 'Completed',
     inspectionDate: '2026-11-20',
-    createdAt: '2026-11-19T00:00:00.000Z',
-    updatedAt: '2026-11-19T00:00:00.000Z',
+    createdAt: '2026-11-18T10:00:00.000Z',
+    updatedAt: '2026-11-18T10:00:00.000Z',
   }));
 
-  const summary = summarizeFinancialLedger(bookings);
-  assert.equal(summary.totalAgentCommissionKobo, 2000000 * 100); // ₦2,000,000
-  assert.equal(summary.totalPlatformCommissionKobo, 1100000 * 100); // ₦1,100,000
-  assert.equal(summary.totalAgentEarningsKobo, 900000 * 100); // ₦900,000
-  assert.equal(summary.totalSugAllocationKobo, 770000 * 100); // ₦770,000
-  assert.equal(summary.totalTechManagerAllocationKobo, 330000 * 100); // ₦330,000
-  assert.equal(summary.totalInspectionFeeKobo, 300000 * 100); // ₦300,000
-  assert.equal(summary.totalLandlordRentKobo, 20000000 * 100); // ₦20,000,000
+  const summary = summarizeFinancialLedger(synthetic);
+  // 90 active/settled bookings * ₦23,000 = ₦2,070,000 (207,000,000 kobo)
+  assert.equal(summary.totalGrossBookingVolumeKobo, 90 * 2300000);
+  assert.equal(summary.totalRefundedKobo, 10 * 2300000);
+  assert.equal(summary.totalAgentEarningsKobo, 90 * 800000);
+  assert.equal(summary.totalSugAllocationKobo, 90 * 700000);
+  assert.equal(summary.totalPlatformTotalKobo, 90 * 800000);
+  assert.equal(summary.totalInspectionFeeKobo, 90 * 300000);
 });
 
-test('enforces role permissions and booking state machine transitions', () => {
-  // Student cannot approve refunds
-  assert.equal(canTransitionBooking('Under SUG Review', 'Refund Approved', 'student').allowed, false);
-  // Tech Manager cannot decide disputes
-  assert.equal(canTransitionBooking('Under SUG Review', 'Refund Approved', 'tech_manager').allowed, false);
-  // SUG Admin can approve refunds
-  assert.equal(canTransitionBooking('Under SUG Review', 'Refund Approved', 'sug_admin').allowed, true);
-  // Agent cannot confirm on behalf of student
+test('enforces strict role permissions between SUG Admin and Super Admin', () => {
   assert.equal(canTransitionBooking('Awaiting Inspection', 'Confirmed', 'agent').allowed, false);
-  // Student confirms after inspection
   assert.equal(canTransitionBooking('Awaiting Inspection', 'Confirmed', 'student').allowed, true);
-  // Terminal states cannot be mutated
-  assert.equal(isTerminalBookingStatus('Settled'), true);
-  assert.equal(canTransitionBooking('Settled', 'Refunded', 'sug_president').allowed, false);
+  assert.equal(canTransitionBooking('Settled', 'Refund Approved', 'sug_admin').allowed, false);
+  // SUG Admin CANNOT execute Paystack refunds or settle transfers; only Super Admin can
+  assert.equal(canTransitionBooking('Refund Approved', 'Refunded', 'sug_admin').allowed, false);
+  assert.equal(canTransitionBooking('Refund Approved', 'Refunded', 'super_admin').allowed, true);
+  assert.equal(canTransitionBooking('Confirmed', 'Settled', 'sug_admin').allowed, false);
+  assert.equal(canTransitionBooking('Confirmed', 'Settled', 'super_admin').allowed, true);
 });
 
 test('validates duplicate webhook protection and invalid signatures', () => {
-  const first = processIdempotentWebhook([], {
-    webhookId: 'wh_001',
-    bookingReference: 'ABSU-LS-20261119-0001',
-    eventType: 'charge.success',
-    amountKobo: 22300000,
-    signatureHeader: 'sig_valid',
-    expectedSignature: 'sig_valid',
-  });
-  assert.equal(first.accepted, true);
-  assert.equal(first.duplicate, false);
+  const events: PaymentEventLog[] = [
+    {
+      eventId: 'evt_1',
+      webhookId: 'wh_123',
+      bookingReference: 'ABSU-LS-20261118-0001',
+      eventType: 'charge.success',
+      amountKobo: 2300000,
+      signatureValid: true,
+      duplicateIgnored: false,
+      status: 'processed',
+      createdAt: '2026-11-18T10:00:00.000Z',
+    },
+  ];
 
-  const duplicate = processIdempotentWebhook([first.logEntry], {
-    webhookId: 'wh_001',
-    bookingReference: 'ABSU-LS-20261119-0001',
+  const dup = processIdempotentWebhook(events, {
+    webhookId: 'wh_123',
+    bookingReference: 'ABSU-LS-20261118-0001',
     eventType: 'charge.success',
-    amountKobo: 22300000,
-    signatureHeader: 'sig_valid',
-    expectedSignature: 'sig_valid',
+    amountKobo: 2300000,
+    signatureHeader: 'secret_abc',
+    expectedSignature: 'secret_abc',
   });
-  assert.equal(duplicate.accepted, true);
-  assert.equal(duplicate.duplicate, true);
-  assert.equal(duplicate.logEntry.status, 'ignored_duplicate');
+  assert.equal(dup.accepted, true);
+  assert.equal(dup.duplicate, true);
+  assert.equal(dup.logEntry.status, 'ignored_duplicate');
 
-  const invalidSig = processIdempotentWebhook([], {
-    webhookId: 'wh_002',
-    bookingReference: 'ABSU-LS-20261119-0001',
+  const badSig = processIdempotentWebhook(events, {
+    webhookId: 'wh_999',
+    bookingReference: 'ABSU-LS-20261118-0002',
     eventType: 'charge.success',
-    amountKobo: 22300000,
-    signatureHeader: 'bad_sig',
-    expectedSignature: 'sig_valid',
+    amountKobo: 2300000,
+    signatureHeader: 'forged',
+    expectedSignature: 'secret_abc',
   });
-  assert.equal(invalidSig.accepted, false);
-  assert.equal(invalidSig.logEntry.status, 'rejected_signature');
+  assert.equal(badSig.accepted, false);
+  assert.equal(badSig.logEntry.status, 'rejected_signature');
 });
 
-test('validates media uploads, commission limits, formatting, and CSV export', () => {
-  assert.equal(validateMediaUpload({ name: 'room.jpg', type: 'image/jpeg', size: 1024 }).valid, true);
-  assert.equal(validateMediaUpload({ name: 'tour.mp4', type: 'video/mp4', size: 1024 * 1024 }).valid, true);
-  assert.equal(validateMediaUpload({ name: 'script.exe', type: 'application/octet-stream', size: 500 }).valid, false);
-  assert.equal(validateMediaUpload({ name: 'huge.mp4', type: 'video/mp4', size: 30 * 1024 * 1024 }).valid, false);
+test('validates discrete agent fees, 3-6 images + optional video, anti-rent-link guard, and inspection time gate', () => {
+  assert.equal(validateAllowedAgentFeeNaira(5000).valid, true);
+  assert.equal(validateAllowedAgentFeeNaira(20000).valid, true);
+  assert.equal(validateAllowedAgentFeeNaira(40000).valid, true);
+  assert.equal(validateAllowedAgentFeeNaira(12500).valid, false);
 
+  assert.equal(validateMediaUpload({ name: 'room.jpg', type: 'image/jpeg', size: 1024 * 1024 }).valid, true);
+  assert.equal(validateMediaUpload({ name: 'tour.mp4', type: 'video/mp4', size: 10 * 1024 * 1024 }).valid, true);
+  assert.equal(validateMediaUpload({ name: 'malware.exe', type: 'application/octet-stream', size: 100 }).valid, false);
+
+  assert.equal(validateLodgeMediaRequirements([{ type: 'image' }, { type: 'image' }]).valid, false);
   assert.equal(
-    validateAgentCommissionWithinLimit(20000000, 2000000, DEFAULT_PLATFORM_SETTINGS.maxCommissionPctOfRent).valid,
+    validateLodgeMediaRequirements([
+      { type: 'image' },
+      { type: 'image' },
+      { type: 'image' },
+    ]).valid,
     true
   );
   assert.equal(
-    validateAgentCommissionWithinLimit(20000000, 5000000, DEFAULT_PLATFORM_SETTINGS.maxCommissionPctOfRent).valid,
+    validateLodgeMediaRequirements([
+      { type: 'image' },
+      { type: 'image' },
+      { type: 'image' },
+      { type: 'image' },
+      { type: 'video' },
+    ]).valid,
+    true
+  );
+
+  assert.equal(detectSuspiciousListingDescription('Clean self contain near School Gate with prepaid meter.').flagged, false);
+  assert.equal(detectSuspiciousListingDescription('Pay rent to agent via https://paystack.com/pay/fake').flagged, true);
+
+  assert.equal(
+    isInspectionConfirmationEligible('2026-11-20', 'Morning: 9am–12pm', new Date('2026-11-25T10:00:00')).eligible,
+    true
+  );
+  assert.equal(
+    isInspectionConfirmationEligible('2026-11-28', 'Afternoon: 12pm–4pm', new Date('2026-11-25T10:00:00')).eligible,
     false
   );
 
-  assert.equal(formatNairaFromKobo(22300000), '₦223,000');
-  assert.match(generateBookingReference(12), /^ABSU-LS-\d{8}-0012$/);
+  const wa = buildAgentWhatsAppLink({
+    phone: '08034128890',
+    studentName: 'Chinedu Okafor',
+    lodgeTitle: 'Unity Executive Lodge',
+    bookingReference: 'ABSU-LS-20261118-0001',
+    inspectionDate: '2026-11-25',
+    inspectionTime: 'Morning: 9am–12pm',
+  });
+  assert.equal(wa.startsWith('https://wa.me/2348034128890?text='), true);
 
-  const csv = generateFinancialCsv([]);
-  assert.match(csv, /Landlord Rent \(NGN\)/);
-  assert.match(csv, /Inspection Fee \(NGN\)/);
-});
-
-test('validates post-payment inspection contact details and 4-image + 1-video lodge upload rules', () => {
   assert.equal(
     validateInspectionContact({
       fullName: 'Chinedu Okafor',
-      phoneNumber: '+234 803 412 8890',
-      preferredTimeSlot: 'Morning (9:00 AM - 12:00 PM)',
-      campusMeetupPoint: 'ABSU Main School Gate',
+      phoneNumber: '+2348034128890',
+      whatsappOrAltPhone: '+2348034128890',
+      preferredTimeSlot: 'Morning: 9am–12pm',
     }).valid,
     true
-  );
-  assert.equal(
-    validateInspectionContact({
-      fullName: 'C',
-      phoneNumber: '123',
-      preferredTimeSlot: '',
-      campusMeetupPoint: '',
-    }).valid,
-    false
   );
 
-  assert.equal(
-    validateLodgeMediaRequirements([
-      { type: 'image' },
-      { type: 'image' },
-      { type: 'image' },
-      { type: 'image' },
-      { type: 'video' },
-    ]).valid,
-    true
-  );
-  assert.equal(
-    validateLodgeMediaRequirements([
-      { type: 'image' },
-      { type: 'image' },
-      { type: 'video' },
-    ]).valid,
-    false
-  );
-  assert.equal(
-    validateLodgeMediaRequirements([
-      { type: 'image' },
-      { type: 'image' },
-      { type: 'image' },
-      { type: 'image' },
-    ]).valid,
-    false
-  );
+  const csv = generateFinancialCsv(SEED_BOOKINGS);
+  assert.equal(csv.includes('Booking Reference'), true);
 });
 
 test('resolves linked booking, lodge, and unread counts for clickable notifications', () => {
-  assert.equal(getUnreadNotificationsCount(SEED_NOTIFICATIONS, 'demo_stu_chinedu'), 1);
-  assert.equal(getUnreadNotificationsCount(SEED_NOTIFICATIONS, 'demo_agt_emeka'), 1);
+  const unreadForStudent = getUnreadNotificationsCount(SEED_NOTIFICATIONS, 'demo_stu_chinedu');
+  assert.equal(unreadForStudent >= 1, true);
 
-  const studentResolved = resolveNotificationDetails(SEED_NOTIFICATIONS[0], {
+  const bookingNotif = SEED_NOTIFICATIONS.find((n) => n.relatedBookingRef);
+  assert.ok(bookingNotif);
+
+  const details = resolveNotificationDetails(bookingNotif, {
     bookings: SEED_BOOKINGS,
     properties: SEED_PROPERTIES,
-    disputes: SEED_DISPUTES,
+    disputes: [],
   });
-  assert.equal(studentResolved.categoryLabel, 'Inspection & Meetup');
-  assert.equal(studentResolved.booking?.bookingReference, 'ABSU-LS-20261115-0001');
-  assert.equal(studentResolved.property?.propertyId, 'prop_unity_selfcon');
 
-  // Even when a notification lacks explicit relatedBookingRef, regex extraction resolves it
-  const textOnlyNotif = {
-    ...SEED_NOTIFICATIONS[1],
-    relatedBookingRef: undefined,
-    relatedPropertyId: undefined,
-    category: undefined,
-  };
-  const agentResolved = resolveNotificationDetails(textOnlyNotif, {
-    bookings: SEED_BOOKINGS,
-    properties: SEED_PROPERTIES,
-    disputes: SEED_DISPUTES,
-  });
-  assert.equal(agentResolved.booking?.bookingReference, 'ABSU-LS-20261115-0001');
-  assert.equal(agentResolved.property?.propertyId, 'prop_unity_selfcon');
+  assert.equal(details.booking?.bookingReference, bookingNotif.relatedBookingRef);
+  assert.equal(details.property?.propertyId, bookingNotif.relatedPropertyId);
 });

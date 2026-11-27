@@ -3,23 +3,62 @@ export type UserRole =
   | 'agent'
   | 'sug_admin'
   | 'sug_president'
-  | 'tech_manager';
+  | 'super_admin'
+  | 'tech_manager'
+  | 'tech_admin';
+
+export function isSuperAdminRole(role?: string | null): boolean {
+  return role === 'super_admin' || role === 'tech_manager' || role === 'tech_admin';
+}
+
+export function isSugAdminRole(role?: string | null): boolean {
+  return role === 'sug_admin' || role === 'sug_president';
+}
+
+export function normalizeRole(role?: string | null): UserRole {
+  if (role === 'tech_manager' || role === 'tech_admin' || role === 'super_admin') {
+    return 'super_admin';
+  }
+  if (role === 'sug_admin' || role === 'sug_president') {
+    return role;
+  }
+  if (role === 'agent') return 'agent';
+  return 'student';
+}
 
 export type LocationArea =
+  | 'Uturu'
   | 'School Gate'
+  | 'ABSU Gate'
+  | 'Okigwe Road'
   | 'Back Gate'
   | 'Inside School'
   | 'Uturu Main Town'
   | 'Eke-Okigwe Axis';
 
 export type PropertyCategory =
-  | 'Self-Contain'
+  | 'Self Contain'
   | 'Single Room'
+  | '2 Bedroom'
+  | '3 Bedroom'
+  | 'Face Me I Face You'
+  | 'Self-Contain'
   | 'Two-Bedroom'
   | 'Apartment'
   | 'Shared Hostel';
 
+export const ALLOWED_AGENT_FEES_NAIRA = [5000, 10000, 15000, 20000, 30000, 40000] as const;
+export type AllowedAgentFeeNaira = (typeof ALLOWED_AGENT_FEES_NAIRA)[number];
+
 export type AvailabilityStatus = 'Available' | 'Unavailable';
+
+export type LodgeStatus =
+  | 'Draft'
+  | 'Pending'
+  | 'Approved'
+  | 'Rejected'
+  | 'Booked'
+  | 'Taken';
 
 export type VerificationStatus =
   | 'Pending Verification'
@@ -50,7 +89,33 @@ export type BookingStatus =
   | 'Settled'
   | 'Cancelled';
 
+export type PaymentHoldStatus =
+  | 'unpaid'
+  | 'held'
+  | 'refund_pending'
+  | 'refunded'
+  | 'settlement_processing'
+  | 'settled'
+  | 'failed';
+
+export type TransferStatus =
+  | 'pending'
+  | 'processing'
+  | 'successful'
+  | 'failed'
+  | 'reversed';
+
+export type InspectionTimeSlot =
+  | 'Morning: 9am–12pm'
+  | 'Afternoon: 12pm–4pm'
+  | 'Evening: 4pm–6pm';
+
 export type DisputeReason =
+  | 'Agent did not show up'
+  | 'Lodge is fake'
+  | 'Caretaker does not know agent'
+  | 'Lodge already taken'
+  | 'Agent asked for extra money'
   | 'Lodge does not exist.'
   | 'Agent showed a different property.'
   | 'Landlord authorization could not be verified.'
@@ -69,31 +134,31 @@ export type DisputeStatus =
   | 'Closed';
 
 export interface PlatformSettings {
-  inspectionFeeKobo: number;
-  platformSharePct: number;
-  agentSharePct: number;
-  sugPlatformSharePct: number;
-  techManagerPlatformSharePct: number;
+  inspectionFeeKobo: number; // Fixed ₦3,000 = 300000 kobo (100% Platform Backend Management)
+  agentSharePct: number; // 40% of agent fee
+  sugSharePct: number; // 35% of agent fee
+  platformSharePct: number; // 25% of agent fee
+  holdDurationHours: number; // 48 hours
   maxCommissionPctOfRent: number;
-  paymentMode: 'test_disabled';
+  paymentMode: 'test_disabled' | 'paystack_test' | 'paystack_live';
   paystackPartnerApproved: boolean;
   updatedAt: string;
 }
 
 export interface FinancialBreakdown {
-  yearlyRentKobo: number;
-  agentCommissionKobo: number;
-  inspectionFeeKobo: number;
-  totalPayableKobo: number;
-  platformSharePct: number;
-  agentSharePct: number;
-  sugPlatformSharePct: number;
-  techManagerPlatformSharePct: number;
-  platformCommissionKobo: number;
-  agentEarningsKobo: number;
-  sugAllocationKobo: number;
-  techManagerAllocationKobo: number;
-  landlordRentKobo: number;
+  yearlyRentKobo: number; // Paid DIRECT to landlord/caretaker after inspection (NEVER on platform)
+  agentCommissionKobo: number; // Agent fee
+  inspectionFeeKobo: number; // Fixed ₦3,000 (300000 kobo)
+  totalBookingFeeKobo: number; // agentCommissionKobo + inspectionFeeKobo
+  totalPayableKobo: number; // Amount payable now on platform (= totalBookingFeeKobo)
+  agentSharePct: number; // 40
+  sugSharePct: number; // 35
+  platformSharePct: number; // 25
+  agentEarningsKobo: number; // 40% of agentCommissionKobo
+  sugAllocationKobo: number; // 35% of agentCommissionKobo
+  platformAgentShareKobo: number; // 25% of agentCommissionKobo
+  platformInspectionFeeKobo: number; // 100% of inspectionFeeKobo
+  platformTotalKobo: number; // platformAgentShareKobo + platformInspectionFeeKobo
   processingFeeEstimateKobo: number;
 }
 
@@ -102,6 +167,7 @@ export interface UserProfile {
   fullName: string;
   email: string;
   phone: string;
+  whatsappNumber?: string;
   role: UserRole;
   matricNumber?: string;
   department?: string;
@@ -115,13 +181,19 @@ export interface AgentProfile {
   ownerUid: string;
   fullName: string;
   phone: string;
+  whatsappNumber?: string;
   email: string;
   absuId: string;
+  ninLast4?: string;
+  ninProtectedRef?: string; // Never exposed in public queries
+  operatingArea: LocationArea;
   idDocumentName: string;
+  idDocumentUrl?: string;
   profilePhotoUrl: string;
   bankName: string;
   accountNumber: string;
   accountName: string;
+  paystackRecipientCode?: string;
   emergencyContact: string;
   experienceYears: number;
   status: AgentStatus;
@@ -135,6 +207,7 @@ export interface PropertyMediaItem {
   id: string;
   type: 'image' | 'video';
   url: string;
+  cloudinaryPublicId?: string;
   caption: string;
   fileName: string;
   sizeBytes: number;
@@ -165,7 +238,11 @@ export interface PropertyListing {
   inspectionFeeKobo: number;
   availableRooms: number;
   availabilityStatus: AvailabilityStatus;
+  lodgeStatus: LodgeStatus;
   verificationStatus: VerificationStatus;
+  rejectionReason?: string;
+  flaggedSuspiciousReason?: string;
+  landlordVerified?: boolean;
   featured: boolean;
   coverImageUrl: string;
   media: PropertyMediaItem[];
@@ -174,6 +251,8 @@ export interface PropertyListing {
   amenities: string[];
   landlordName: string;
   landlordPhone: string;
+  caretakerName: string;
+  caretakerPhone: string;
   landlordAuthorizationDoc: string;
   lastConfirmedAt: string;
   createdAt: string;
@@ -182,8 +261,8 @@ export interface PropertyListing {
 export interface InspectionContactDetails {
   fullName: string;
   phoneNumber: string;
-  whatsappOrAltPhone?: string;
-  preferredTimeSlot: string;
+  whatsappOrAltPhone: string;
+  preferredTimeSlot: InspectionTimeSlot | string;
   campusMeetupPoint: string;
   notesForAgent?: string;
   submittedAt: string;
@@ -194,21 +273,60 @@ export interface BookingRecord {
   bookingReference: string;
   studentUid: string;
   studentName: string;
+  studentPhone?: string;
   studentMatric: string;
   agentUid: string;
   agentName: string;
+  agentPhone?: string;
+  agentPhotoUrl?: string;
   propertyId: string;
   propertyTitle: string;
+  propertyRoomType?: string;
   propertyCoverUrl: string;
   locationArea: LocationArea;
   breakdown: FinancialBreakdown;
   status: BookingStatus;
-  paymentStatus: 'Unpaid' | 'Test Paid' | 'Failed' | 'Refunded';
+  paymentStatus: 'Unpaid' | 'Held' | 'Test Paid' | 'Failed' | 'Refund Pending' | 'Refunded' | 'Settled';
+  paymentHoldStatus: PaymentHoldStatus;
   inspectionStatus: 'Pending Schedule' | 'Scheduled' | 'Completed' | 'Disputed';
   inspectionDate: string;
+  inspectionTimeSlot?: InspectionTimeSlot | string;
   inspectionContact?: InspectionContactDetails;
+  paidAt?: string;
+  splitAt?: string; // paidAt + 48 hours
   confirmedAt?: string;
+  autoConfirmed?: boolean;
   settlementAuthorizationCode?: string;
+  paystackReference?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SettlementTransferRecord {
+  settlementId: string;
+  bookingId: string;
+  bookingReference: string;
+  recipientType: 'agent' | 'sug' | 'platform';
+  recipientName: string;
+  amountKobo: number;
+  transferCode?: string;
+  status: TransferStatus;
+  retryCount: number;
+  failureReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RefundRecord {
+  refundId: string;
+  bookingId: string;
+  bookingReference: string;
+  studentUid: string;
+  amountKobo: number;
+  reason: DisputeReason;
+  paystackRefundRef?: string;
+  status: 'pending' | 'processing' | 'processed' | 'failed';
+  failureReason?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -217,7 +335,16 @@ export interface PaymentEventLog {
   eventId: string;
   webhookId: string;
   bookingReference: string;
-  eventType: 'charge.success' | 'charge.failed' | 'refund.processed' | 'transfer.settled';
+  eventType:
+    | 'charge.success'
+    | 'charge.failed'
+    | 'refund.processed'
+    | 'refund.pending'
+    | 'refund.failed'
+    | 'transfer.success'
+    | 'transfer.failed'
+    | 'transfer.reversed'
+    | 'transfer.settled';
   amountKobo: number;
   signatureValid: boolean;
   duplicateIgnored: boolean;
@@ -253,7 +380,7 @@ export interface NotificationItem {
   recipientRole: UserRole;
   title: string;
   message: string;
-  channel: 'in_app' | 'email';
+  channel: 'in_app' | 'email' | 'whatsapp' | 'sms';
   read: boolean;
   createdAt: string;
   relatedBookingRef?: string;
@@ -268,7 +395,7 @@ export interface AuditLogEntry {
   actorName: string;
   actorRole: UserRole;
   action: string;
-  targetType: 'property' | 'agent' | 'booking' | 'dispute' | 'settings' | 'system' | 'payment';
+  targetType: 'property' | 'agent' | 'booking' | 'dispute' | 'settings' | 'system' | 'payment' | 'user' | 'settlement' | 'refund';
   targetId: string;
   summary: string;
   createdAt: string;

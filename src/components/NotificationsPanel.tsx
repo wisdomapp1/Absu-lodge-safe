@@ -14,7 +14,7 @@ import {
 import { useMarketplace } from '../context/MarketplaceContext';
 import { formatNairaFromKobo } from '../domain/finance';
 import { resolveNotificationDetails } from '../domain/notifications';
-import { NotificationItem, UserRole } from '../domain/types';
+import { isSugAdminRole, isSuperAdminRole, NotificationItem, UserRole } from '../domain/types';
 
 export type NotificationNavigationTarget =
   | { type: 'property'; propertyId: string }
@@ -99,12 +99,8 @@ export function NotificationsPanel({
     } else if (role === 'agent') {
       if (resolvedDetails.booking) {
         actions.push({
-          label: 'Open Scheduled Inspections',
-          target: { type: 'section', section: 'inspections' },
-        });
-        actions.push({
-          label: 'View Lodge Bookings',
-          target: { type: 'section', section: 'bookings' },
+          label: 'Open Booking Alerts',
+          target: { type: 'section', section: 'alerts' },
         });
       }
       if (resolvedDetails.property) {
@@ -113,20 +109,11 @@ export function NotificationsPanel({
           target: { type: 'section', section: 'lodges' },
         });
       }
-    } else if (role === 'sug_president' || role === 'sug_admin') {
+    } else if (isSugAdminRole(role)) {
       if (resolvedDetails.dispute) {
         actions.push({
-          label: 'Open Dispute Centre',
-          target: { type: 'section', section: 'disputes' },
-        });
-      }
-      if (
-        resolvedDetails.categoryLabel === 'SUG Verification' ||
-        /kyc|agent/i.test(resolvedDetails.notification.message)
-      ) {
-        actions.push({
-          label: 'Review in Agent Management',
-          target: { type: 'section', section: 'agents' },
+          label: 'Open Complaints',
+          target: { type: 'section', section: 'complaints' },
         });
       }
       if (
@@ -134,14 +121,27 @@ export function NotificationsPanel({
         resolvedDetails.categoryLabel === 'SUG Verification'
       ) {
         actions.push({
-          label: 'Review in Lodge Verification',
+          label: 'Review in Lodge Approval Queue',
           target: { type: 'section', section: 'lodges' },
         });
       }
       if (resolvedDetails.booking && !resolvedDetails.dispute) {
         actions.push({
-          label: 'View Financial Ledger',
-          target: { type: 'section', section: 'financials' },
+          label: 'View Realtime Bookings',
+          target: { type: 'section', section: 'bookings' },
+        });
+      }
+    } else if (isSuperAdminRole(role)) {
+      if (resolvedDetails.dispute) {
+        actions.push({
+          label: 'Open Refunds Queue',
+          target: { type: 'section', section: 'refunds' },
+        });
+      }
+      if (resolvedDetails.booking) {
+        actions.push({
+          label: 'Open Bookings & Splits',
+          target: { type: 'section', section: 'bookings' },
         });
       }
     }
@@ -153,10 +153,10 @@ export function NotificationsPanel({
 
   return (
     <>
-      <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
           <div>
-            <h2 className="text-lg font-display font-bold text-slate-900">
+            <h2 className="text-lg font-display font-bold text-[#111827]">
               Notifications
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -165,13 +165,13 @@ export function NotificationsPanel({
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs font-mono text-slate-600 tabular-nums">
-              Unread: <strong className="text-emerald-800">{unreadCount}</strong> / {notifications.length}
+              Unread: <strong className="text-[#15803D]">{unreadCount}</strong> / {notifications.length}
             </span>
             {unreadCount > 0 && (
               <button
                 type="button"
                 onClick={markAllNotificationsRead}
-                className="px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
+                className="px-3 py-1.5 text-xs font-semibold text-[#15803D] bg-emerald-50 border border-emerald-200 rounded-xl hover:bg-emerald-100 transition-colors"
               >
                 Mark All Read
               </button>
@@ -192,7 +192,7 @@ export function NotificationsPanel({
                 type="button"
                 onClick={() => handleOpenNotification(n)}
                 aria-label={`Open notification: ${n.title}`}
-                className={`w-full text-left border rounded-xl p-4 flex items-start justify-between gap-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 ${
+                className={`w-full text-left border rounded-2xl p-4 flex items-start justify-between gap-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16A34A] ${
                   n.read
                     ? 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/70'
                     : 'border-emerald-300 bg-emerald-50/50 hover:bg-emerald-50'
@@ -200,13 +200,7 @@ export function NotificationsPanel({
               >
                 <div className="min-w-0 flex-1 space-y-1">
                   <div className="flex items-center gap-2">
-                    {!n.read && (
-                      <span
-                        className="w-2 h-2 rounded-full bg-emerald-700 shrink-0"
-                        aria-hidden="true"
-                      />
-                    )}
-                    <span className="text-sm font-semibold text-slate-900 truncate">
+                    <span className="text-sm font-semibold text-[#111827] truncate">
                       {n.title}
                     </span>
                   </div>
@@ -216,12 +210,12 @@ export function NotificationsPanel({
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono text-slate-400 pt-0.5">
                     <span>{n.createdAt.slice(0, 16).replace('T', ' ')}</span>
                     <span>·</span>
-                    <span className={n.read ? 'text-slate-400' : 'text-emerald-800 font-semibold'}>
+                    <span className={n.read ? 'text-slate-400' : 'text-[#15803D] font-semibold'}>
                       {n.read ? 'Read' : 'Unread'}
                     </span>
                   </div>
                 </div>
-                <div className="shrink-0 flex items-center gap-1 text-xs font-semibold text-emerald-800 pt-0.5">
+                <div className="shrink-0 flex items-center gap-1 text-xs font-semibold text-[#15803D] pt-0.5">
                   <span className="hidden sm:inline">View Details</span>
                   <ChevronRight className="w-4 h-4" />
                 </div>
@@ -231,7 +225,6 @@ export function NotificationsPanel({
         )}
       </div>
 
-      {/* Notification Details Dialog */}
       {resolvedDetails && (
         <div
           className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto"
@@ -239,15 +232,15 @@ export function NotificationsPanel({
           aria-modal="true"
           aria-labelledby="notification-detail-title"
         >
-          <div className="bg-white rounded-xl max-w-xl w-full border border-slate-200 overflow-hidden my-6 max-h-[90vh] flex flex-col">
+          <div className="bg-white rounded-2xl max-w-xl w-full border border-slate-200 overflow-hidden my-6 max-h-[90vh] flex flex-col">
             <div className="px-6 py-4 border-b border-slate-200 flex items-start justify-between gap-4">
               <div className="min-w-0 space-y-1">
-                <p className="text-xs font-semibold text-emerald-800 uppercase tracking-wide">
+                <p className="text-xs font-semibold text-[#15803D] uppercase tracking-wide">
                   {resolvedDetails.categoryLabel}
                 </p>
                 <h3
                   id="notification-detail-title"
-                  className="text-lg font-display font-bold text-slate-900 leading-snug"
+                  className="text-lg font-display font-bold text-[#111827] leading-snug"
                 >
                   {resolvedDetails.notification.title}
                 </h3>
@@ -263,25 +256,24 @@ export function NotificationsPanel({
             </div>
 
             <div className="p-6 space-y-5 overflow-y-auto">
-              {/* Metadata bar */}
-              <dl className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+              <dl className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs bg-slate-50 border border-slate-200 rounded-xl p-3.5">
                 <div>
                   <dt className="text-slate-500">Received</dt>
-                  <dd className="font-mono font-semibold text-slate-900 mt-0.5">
+                  <dd className="font-mono font-semibold text-[#111827] mt-0.5">
                     {resolvedDetails.notification.createdAt.slice(0, 16).replace('T', ' ')}
                   </dd>
                 </div>
                 <div>
                   <dt className="text-slate-500">Delivery Channel</dt>
-                  <dd className="font-semibold text-slate-900 mt-0.5 inline-flex items-center gap-1">
+                  <dd className="font-semibold text-[#111827] mt-0.5 inline-flex items-center gap-1">
                     {resolvedDetails.notification.channel === 'email' ? (
                       <>
-                        <Mail className="w-3.5 h-3.5 text-emerald-800" />
+                        <Mail className="w-3.5 h-3.5 text-[#16A34A]" />
                         <span>Email Alert</span>
                       </>
                     ) : (
                       <>
-                        <Bell className="w-3.5 h-3.5 text-emerald-800" />
+                        <Bell className="w-3.5 h-3.5 text-[#16A34A]" />
                         <span>In-App Alert</span>
                       </>
                     )}
@@ -289,52 +281,50 @@ export function NotificationsPanel({
                 </div>
                 <div>
                   <dt className="text-slate-500">Status</dt>
-                  <dd className="font-semibold text-emerald-800 mt-0.5 inline-flex items-center gap-1">
+                  <dd className="font-semibold text-[#15803D] mt-0.5 inline-flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>Read</span>
                   </dd>
                 </div>
               </dl>
 
-              {/* Full message */}
               <div className="space-y-1.5">
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
                   Notification Message
                 </p>
-                <p className="text-sm text-slate-800 leading-relaxed bg-white border border-slate-200 rounded-lg p-4">
+                <p className="text-sm text-slate-800 leading-relaxed bg-white border border-slate-200 rounded-xl p-4">
                   {resolvedDetails.notification.message}
                 </p>
               </div>
 
-              {/* Linked Booking Details */}
               {resolvedDetails.booking && (
-                <div className="border border-slate-200 rounded-xl p-4 space-y-3 bg-slate-50/70">
-                  <p className="text-xs font-semibold text-slate-900 flex items-center gap-1.5">
-                    <CalendarCheck className="w-4 h-4 text-emerald-800" />
+                <div className="border border-slate-200 rounded-2xl p-4 space-y-3 bg-slate-50/70">
+                  <p className="text-xs font-semibold text-[#111827] flex items-center gap-1.5">
+                    <CalendarCheck className="w-4 h-4 text-[#16A34A]" />
                     <span>Linked Booking Summary</span>
                   </p>
                   <dl className="grid sm:grid-cols-2 gap-2.5 text-xs">
                     <div>
                       <dt className="text-slate-500">Booking Reference</dt>
-                      <dd className="font-mono font-bold text-slate-900 mt-0.5">
+                      <dd className="font-mono font-bold text-[#111827] mt-0.5">
                         {resolvedDetails.booking.bookingReference}
                       </dd>
                     </div>
                     <div>
                       <dt className="text-slate-500">Booking Status</dt>
-                      <dd className="font-semibold text-emerald-800 mt-0.5">
+                      <dd className="font-semibold text-[#15803D] mt-0.5">
                         {resolvedDetails.booking.status}
                       </dd>
                     </div>
                     <div>
                       <dt className="text-slate-500">Lodge</dt>
-                      <dd className="font-semibold text-slate-900 mt-0.5">
+                      <dd className="font-semibold text-[#111827] mt-0.5">
                         {resolvedDetails.booking.propertyTitle}
                       </dd>
                     </div>
                     <div>
                       <dt className="text-slate-500">Inspection Date</dt>
-                      <dd className="font-mono font-semibold text-slate-900 mt-0.5">
+                      <dd className="font-mono font-semibold text-[#111827] mt-0.5">
                         {resolvedDetails.booking.inspectionDate} ({resolvedDetails.booking.locationArea})
                       </dd>
                     </div>
@@ -342,17 +332,17 @@ export function NotificationsPanel({
                       <dt className="text-slate-500">
                         {role === 'agent' ? 'Student' : 'Verified Agent'}
                       </dt>
-                      <dd className="font-semibold text-slate-900 mt-0.5">
+                      <dd className="font-semibold text-[#111827] mt-0.5">
                         {role === 'agent'
-                          ? `${resolvedDetails.booking.studentName} (${resolvedDetails.booking.studentMatric})`
+                          ? `${resolvedDetails.booking.studentName}`
                           : resolvedDetails.booking.agentName}
                       </dd>
                     </div>
                     <div>
                       <dt className="text-slate-500">
-                        {role === 'agent' ? 'Your 45% Net Share' : 'Total Protected Payment'}
+                        {role === 'agent' ? 'Your 40% Net Share' : 'Booking Fee Paid'}
                       </dt>
-                      <dd className="font-mono font-bold text-slate-900 tabular-nums mt-0.5">
+                      <dd className="font-mono font-bold text-[#111827] tabular-nums mt-0.5">
                         {role === 'agent'
                           ? formatNairaFromKobo(resolvedDetails.booking.breakdown.agentEarningsKobo)
                           : formatNairaFromKobo(resolvedDetails.booking.breakdown.totalPayableKobo)}
@@ -361,72 +351,56 @@ export function NotificationsPanel({
                   </dl>
 
                   {resolvedDetails.booking.inspectionContact && (
-                    <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-1 text-xs">
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 space-y-1 text-xs">
                       <p className="font-semibold text-emerald-950 flex items-center gap-1.5">
-                        <PhoneCall className="w-3.5 h-3.5 text-emerald-800" />
+                        <PhoneCall className="w-3.5 h-3.5 text-[#15803D]" />
                         <span>Inspection Contact Details</span>
                       </p>
                       <p className="text-slate-800">
-                        Name: <strong>{resolvedDetails.booking.inspectionContact.fullName}</strong> ·
-                        Phone:{' '}
+                        Name: <strong>{resolvedDetails.booking.inspectionContact.fullName}</strong> · Phone:{' '}
                         <a
                           href={`tel:${resolvedDetails.booking.inspectionContact.phoneNumber}`}
-                          className="font-mono font-semibold text-emerald-900 underline"
+                          className="font-mono font-semibold text-[#15803D] underline"
                         >
                           {resolvedDetails.booking.inspectionContact.phoneNumber}
                         </a>
                       </p>
-                      {resolvedDetails.booking.inspectionContact.whatsappOrAltPhone && (
-                        <p className="text-slate-800">
-                          WhatsApp / Alt:{' '}
-                          <span className="font-mono font-semibold">
-                            {resolvedDetails.booking.inspectionContact.whatsappOrAltPhone}
-                          </span>
-                        </p>
-                      )}
                       <p className="text-slate-800">
-                        Time: <strong>{resolvedDetails.booking.inspectionContact.preferredTimeSlot}</strong> · Meetup:{' '}
-                        <strong>{resolvedDetails.booking.inspectionContact.campusMeetupPoint}</strong>
+                        Time: <strong>{resolvedDetails.booking.inspectionContact.preferredTimeSlot}</strong>
                       </p>
-                      {resolvedDetails.booking.inspectionContact.notesForAgent && (
-                        <p className="text-slate-700">
-                          Note: &quot;{resolvedDetails.booking.inspectionContact.notesForAgent}&quot;
-                        </p>
-                      )}
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Linked Lodge Details (when no booking matched or standalone lodge notification) */}
               {!resolvedDetails.booking && resolvedDetails.property && (
-                <div className="border border-slate-200 rounded-xl p-4 space-y-2.5 bg-slate-50/70">
-                  <p className="text-xs font-semibold text-slate-900 flex items-center gap-1.5">
-                    <Building2 className="w-4 h-4 text-emerald-800" />
+                <div className="border border-slate-200 rounded-2xl p-4 space-y-2.5 bg-slate-50/70">
+                  <p className="text-xs font-semibold text-[#111827] flex items-center gap-1.5">
+                    <Building2 className="w-4 h-4 text-[#16A34A]" />
                     <span>Linked Lodge Listing</span>
                   </p>
                   <dl className="grid sm:grid-cols-2 gap-2.5 text-xs">
                     <div>
                       <dt className="text-slate-500">Lodge Name</dt>
-                      <dd className="font-semibold text-slate-900 mt-0.5">
+                      <dd className="font-semibold text-[#111827] mt-0.5">
                         {resolvedDetails.property.title}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-slate-500">Verification Status</dt>
-                      <dd className="font-semibold text-emerald-800 mt-0.5">
-                        {resolvedDetails.property.verificationStatus}
+                      <dt className="text-slate-500">Approval Status</dt>
+                      <dd className="font-semibold text-[#15803D] mt-0.5">
+                        {resolvedDetails.property.lodgeStatus}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-slate-500">Location &amp; Type</dt>
+                      <dt className="text-slate-500">Location &amp; Room Type</dt>
                       <dd className="text-slate-800 mt-0.5">
                         {resolvedDetails.property.locationArea} · {resolvedDetails.property.category}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-slate-500">Yearly Rent</dt>
-                      <dd className="font-mono font-semibold text-slate-900 tabular-nums mt-0.5">
+                      <dt className="text-slate-500">Annual Rent (Direct)</dt>
+                      <dd className="font-mono font-semibold text-[#111827] tabular-nums mt-0.5">
                         {formatNairaFromKobo(resolvedDetails.property.yearlyRentKobo)}
                       </dd>
                     </div>
@@ -434,28 +408,18 @@ export function NotificationsPanel({
                 </div>
               )}
 
-              {/* Linked Dispute Details */}
               {resolvedDetails.dispute && (
-                <div className="border border-amber-200 rounded-xl p-4 space-y-2 bg-amber-50/60 text-xs">
+                <div className="border border-amber-200 rounded-2xl p-4 space-y-2 bg-amber-50/60 text-xs">
                   <p className="font-semibold text-amber-950 flex items-center gap-1.5">
                     <Gavel className="w-4 h-4 text-amber-800" />
-                    <span>Dispute Case: {resolvedDetails.dispute.disputeId}</span>
+                    <span>Refund / Complaint: {resolvedDetails.dispute.disputeId}</span>
                   </p>
                   <p className="text-slate-800">
                     Reason: <strong>{resolvedDetails.dispute.reason}</strong> · Status:{' '}
                     <strong className="text-amber-900">{resolvedDetails.dispute.status}</strong>
                   </p>
-                  {resolvedDetails.dispute.resolutionNote && (
-                    <p className="text-slate-700">
-                      Decision Note: {resolvedDetails.dispute.resolutionNote}
-                    </p>
-                  )}
                 </div>
               )}
-
-              <p className="text-[11px] font-mono text-slate-400">
-                Notification ID: {resolvedDetails.notification.notificationId}
-              </p>
             </div>
 
             <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex flex-wrap items-center justify-end gap-2.5">
@@ -467,7 +431,7 @@ export function NotificationsPanel({
                     setSelectedNotificationId(null);
                     onNavigate?.(act.target);
                   }}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 transition-colors"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#16A34A] rounded-xl hover:bg-[#15803D] transition-colors"
                 >
                   <span>{act.label}</span>
                   <ArrowRight className="w-3.5 h-3.5" />
@@ -476,7 +440,7 @@ export function NotificationsPanel({
               <button
                 type="button"
                 onClick={() => setSelectedNotificationId(null)}
-                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors"
+                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors"
               >
                 Close
               </button>

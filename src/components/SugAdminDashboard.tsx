@@ -1,16 +1,16 @@
 import React, { useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   Bell,
   Building2,
+  ClipboardList,
   Download,
-  FileSpreadsheet,
   Gavel,
   LayoutDashboard,
   LogOut,
   Megaphone,
-  Settings,
   ShieldCheck,
-  Users,
+  XCircle,
 } from 'lucide-react';
 import { useMarketplace } from '../context/MarketplaceContext';
 import {
@@ -18,36 +18,30 @@ import {
   generateFinancialCsv,
   summarizeFinancialLedger,
 } from '../domain/finance';
-import { PropertyListing } from '../domain/types';
+import { isSugAdminRole, PropertyListing } from '../domain/types';
 import { NotificationsPanel } from './NotificationsPanel';
 
 type SugTab =
   | 'overview'
-  | 'agents'
   | 'lodges'
+  | 'bookings'
   | 'disputes'
-  | 'financials'
   | 'notifications'
-  | 'governance';
+  | 'announcements';
 
 export function SugAdminDashboard() {
   const {
     currentUser,
-    agents,
     properties,
     bookings,
     disputes,
-    settings,
     auditLogs,
     notifications,
     setActivePage,
     openPropertyDetails,
-    reviewAgentAsSug,
     reviewLodgeAsSug,
     toggleLodgeAvailability,
     resolveDisputeAsSug,
-    processApprovedRefund,
-    updatePlatformSettings,
     publishAnnouncement,
     logoutUser,
     showToast,
@@ -55,30 +49,24 @@ export function SugAdminDashboard() {
 
   const [tab, setTab] = useState<SugTab>('overview');
   const [resolutionNotes, setResolutionNotes] = useState<Record<string, string>>({});
-  const [editingProperty, setEditingProperty] = useState<PropertyListing | null>(null);
-  const [editTitle, setEditTitle] = useState('');
-  const [editRooms, setEditRooms] = useState('1');
-
-  // Commission policy controls
-  const [platformPct, setPlatformPct] = useState(String(settings.platformSharePct));
-  const [sugPct, setSugPct] = useState(String(settings.sugPlatformSharePct));
-  const [maxCommPct, setMaxCommPct] = useState(String(settings.maxCommissionPctOfRent));
+  const [rejectTarget, setRejectTarget] = useState<PropertyListing | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
   const [annTitle, setAnnTitle] = useState('');
   const [annBody, setAnnBody] = useState('');
 
-  if (!currentUser || !['sug_president', 'sug_admin'].includes(currentUser.role)) {
+  if (!currentUser || !isSugAdminRole(currentUser.role)) {
     return (
       <div className="max-w-3xl mx-auto px-4 py-16 text-center space-y-4">
-        <h1 className="text-2xl font-display font-bold text-slate-900">
-          SUG Administration Restricted
+        <h1 className="text-2xl font-display font-bold text-[#111827]">
+          SUG Admin Access Restricted
         </h1>
         <p className="text-sm text-slate-600">
-          Unauthorized users cannot access SUG President &amp; Accommodation Administration.
+          Unauthorized users cannot access the SUG Accommodation Admin Portal.
         </p>
         <button
           type="button"
           onClick={() => setActivePage('home')}
-          className="px-4 py-2 text-sm font-semibold text-white bg-emerald-800 rounded-lg"
+          className="px-5 py-3 min-h-[48px] text-sm font-semibold text-white bg-[#16A34A] hover:bg-[#15803D] rounded-xl"
         >
           Return to Marketplace
         </button>
@@ -88,18 +76,32 @@ export function SugAdminDashboard() {
 
   const summary = useMemo(() => summarizeFinancialLedger(bookings), [bookings]);
 
-  const uniqueStudentsCount = useMemo(() => {
-    const ids = new Set(bookings.map((b) => b.studentUid));
-    return Math.max(ids.size, 2);
-  }, [bookings]);
+  const pendingLodgesCount = useMemo(
+    () =>
+      properties.filter(
+        (p) => p.lodgeStatus === 'Pending' || p.verificationStatus === 'Pending Verification'
+      ).length,
+    [properties]
+  );
+
+  const todayPrefix = new Date().toISOString().slice(0, 10);
+  const bookingsTodayCount = useMemo(
+    () => bookings.filter((b) => b.createdAt.startsWith(todayPrefix)).length,
+    [bookings, todayPrefix]
+  );
+
+  const totalStudentsBookedCount = useMemo(
+    () => new Set(bookings.map((b) => b.studentUid)).size,
+    [bookings]
+  );
 
   const myNotifications = useMemo(
     () =>
       notifications.filter(
         (n) =>
           n.recipientUid === currentUser.uid ||
-          n.recipientRole === 'sug_president' ||
-          n.recipientRole === 'sug_admin'
+          n.recipientRole === 'sug_admin' ||
+          n.recipientRole === 'sug_president'
       ),
     [notifications, currentUser.uid]
   );
@@ -109,69 +111,30 @@ export function SugAdminDashboard() {
     [myNotifications]
   );
 
-  const kpis = [
-    { label: 'Total Registered Students', value: uniqueStudentsCount },
-    { label: 'Total Registered Agents', value: agents.length },
-    { label: 'Approved Agents', value: agents.filter((a) => a.status === 'Approved').length },
-    { label: 'Pending Agent Applications', value: agents.filter((a) => a.status === 'Pending Approval').length },
-    { label: 'Total Lodges', value: properties.length },
-    { label: 'SUG Verified Lodges', value: properties.filter((p) => p.verificationStatus === 'SUG Verified').length },
-    { label: 'Available Lodges', value: properties.filter((p) => p.availabilityStatus === 'Available').length },
-    { label: 'Total Bookings', value: bookings.length },
-    { label: 'Confirmed & Settled', value: bookings.filter((b) => b.status === 'Settled' || b.status === 'Confirmed').length },
-    {
-      label: 'Awaiting Inspections',
-      value: bookings.filter((b) => b.status === 'Awaiting Inspection' || b.status === 'Inspection Scheduled').length,
-    },
-    {
-      label: 'Open Disputes',
-      value: disputes.filter((d) => !['Closed', 'Refund Rejected', 'Refund Approved'].includes(d.status)).length,
-    },
-    { label: 'Total Commission Generated', value: formatNairaFromKobo(summary.totalAgentCommissionKobo) },
-    { label: 'SUG Revenue (70% of 55%)', value: formatNairaFromKobo(summary.totalSugAllocationKobo) },
-    { label: 'Tech Manager Allocation (30% of 55%)', value: formatNairaFromKobo(summary.totalTechManagerAllocationKobo) },
-    { label: 'Pending Conditional Settlements', value: formatNairaFromKobo(summary.pendingSettlementKobo) },
-  ];
-
-  const downloadReport = (format: 'csv' | 'xls') => {
+  const downloadSugReport = () => {
     const csv = generateFinancialCsv(bookings);
-    const mime =
-      format === 'csv'
-        ? 'text/csv;charset=utf-8'
-        : 'application/vnd.ms-excel;charset=utf-8';
-    const blob = new Blob([csv], { type: mime });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `absu-lodgesafe-financial-report.${format}`;
+    a.download = `absu-sug-35pct-earnings-report.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast('success', `Downloaded financial report (.${format}).`);
+    showToast('success', 'Downloaded SUG 35% earnings CSV.');
   };
 
-  const handleSavePropertyEdit = (e: React.FormEvent) => {
+  const handleConfirmReject = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingProperty) return;
-    reviewLodgeAsSug(editingProperty.propertyId, editingProperty.verificationStatus, {
-      title: editTitle.trim(),
-      availableRooms: Number(editRooms),
+    if (!rejectTarget) return;
+    const res = reviewLodgeAsSug(rejectTarget.propertyId, 'Rejected', {
+      rejectionReason,
     });
-    setEditingProperty(null);
-  };
-
-  const handleSaveSettings = (e: React.FormEvent) => {
-    e.preventDefault();
-    const p = Number(platformPct);
-    const s = Number(sugPct);
-    const m = Number(maxCommPct);
-    const res = updatePlatformSettings({
-      platformSharePct: p,
-      agentSharePct: 100 - p,
-      sugPlatformSharePct: s,
-      techManagerPlatformSharePct: 100 - s,
-      maxCommissionPctOfRent: m,
-    });
-    if (!res.ok) showToast('error', res.error || 'Invalid commission rules.');
+    if (!res.ok) {
+      showToast('error', res.error || 'Please provide a rejection reason.');
+      return;
+    }
+    setRejectTarget(null);
+    setRejectionReason('');
   };
 
   const handlePublishAnnouncement = (e: React.FormEvent) => {
@@ -184,10 +147,13 @@ export function SugAdminDashboard() {
 
   const tabs: { id: SugTab; label: string; icon: React.ReactNode }[] = [
     { id: 'overview', label: 'Overview', icon: <LayoutDashboard className="w-4 h-4" /> },
-    { id: 'agents', label: 'Agent Management', icon: <Users className="w-4 h-4" /> },
-    { id: 'lodges', label: 'Lodge Verification', icon: <Building2 className="w-4 h-4" /> },
-    { id: 'disputes', label: 'Dispute Centre', icon: <Gavel className="w-4 h-4" /> },
-    { id: 'financials', label: 'Financial Dashboard', icon: <FileSpreadsheet className="w-4 h-4" /> },
+    {
+      id: 'lodges',
+      label: pendingLodgesCount > 0 ? `Lodge Approval (${pendingLodgesCount})` : 'Lodge Approval',
+      icon: <Building2 className="w-4 h-4" />,
+    },
+    { id: 'bookings', label: 'Bookings & SUG 35%', icon: <ClipboardList className="w-4 h-4" /> },
+    { id: 'disputes', label: 'Complaints Review', icon: <Gavel className="w-4 h-4" /> },
     {
       id: 'notifications',
       label:
@@ -196,32 +162,35 @@ export function SugAdminDashboard() {
           : 'Notifications',
       icon: <Bell className="w-4 h-4" />,
     },
-    { id: 'governance', label: 'Policy & Handover', icon: <Settings className="w-4 h-4" /> },
+    { id: 'announcements', label: 'SUG Notices', icon: <Megaphone className="w-4 h-4" /> },
   ];
 
   return (
-    <div className="bg-slate-50 min-h-screen">
+    <div className="bg-slate-50 min-h-screen text-[#111827]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
         {/* Executive Header */}
-        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <p className="text-xs font-semibold text-emerald-800 inline-flex items-center gap-1.5">
+              <p className="text-xs font-semibold text-[#16A34A] inline-flex items-center gap-1.5">
                 <ShieldCheck className="w-4 h-4" />
-                <span>ABSU Students’ Union Government · Executive Oversight</span>
+                <span>ABSU Students’ Union Government · SUG Admin Portal</span>
               </p>
-              <h1 className="text-2xl font-display font-bold text-slate-900 mt-1">
-                SUG President Administration Dashboard
+              <h1 className="text-2xl font-display font-bold text-[#111827] mt-1">
+                SUG Lodge Verification &amp; Oversight
               </h1>
+              <p className="text-xs text-slate-500 mt-0.5">
+                SUG Admins approve lodges, monitor bookings/35% SUG earnings, and review student complaints. Gateway keys &amp; bank transfers are managed strictly by Super Admin.
+              </p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 self-start sm:self-auto">
               <p className="text-xs text-slate-500">
-                Signed in: <strong className="text-slate-800">{currentUser.fullName}</strong>
+                Signed in: <strong className="text-[#111827]">{currentUser.fullName}</strong>
               </p>
               <button
                 type="button"
                 onClick={logoutUser}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Log Out</span>
@@ -235,9 +204,9 @@ export function SugAdminDashboard() {
                 key={t.id}
                 type="button"
                 onClick={() => setTab(t.id)}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg whitespace-nowrap shrink-0 ${
+                className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 ${
                   tab === t.id
-                    ? 'bg-emerald-800 text-white'
+                    ? 'bg-[#16A34A] text-white'
                     : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 }`}
               >
@@ -248,28 +217,48 @@ export function SugAdminDashboard() {
           </div>
         </div>
 
+        {/* OVERVIEW: 4 Core KPIs */}
         {tab === 'overview' && (
           <div className="space-y-6">
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-              {kpis.map((kpi) => (
-                <div key={kpi.label} className="bg-white border border-slate-200 rounded-xl p-4">
-                  <p className="text-xs text-slate-500 leading-snug">{kpi.label}</p>
-                  <p className="text-lg font-mono font-bold text-slate-900 tabular-nums mt-1.5">
-                    {kpi.value}
-                  </p>
-                </div>
-              ))}
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                <p className="text-xs text-slate-500">Total Lodges Pending</p>
+                <p className="text-2xl font-display font-bold text-amber-700 tabular-nums mt-1">
+                  {pendingLodgesCount}
+                </p>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                <p className="text-xs text-slate-500">Total Bookings Today</p>
+                <p className="text-2xl font-display font-bold text-[#111827] tabular-nums mt-1">
+                  {bookingsTodayCount}
+                </p>
+              </div>
+              <div className="bg-white border border-green-200 bg-green-50/50 rounded-2xl p-5">
+                <p className="text-xs font-semibold text-[#15803D]">Total SUG Earnings (35%)</p>
+                <p className="text-2xl font-mono font-bold text-[#16A34A] tabular-nums mt-1">
+                  {formatNairaFromKobo(summary.totalSugAllocationKobo)}
+                </p>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                <p className="text-xs text-slate-500">Total Students Booked</p>
+                <p className="text-2xl font-display font-bold text-[#111827] tabular-nums mt-1">
+                  {totalStudentsBookedCount}
+                </p>
+              </div>
             </div>
 
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-3">
-              <h2 className="text-base font-display font-bold text-slate-900">
-                Recent Governance &amp; Verification Audit Trail
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-3">
+              <h2 className="text-base font-display font-bold text-[#111827]">
+                Recent SUG Verification &amp; Oversight Activity
               </h2>
               <div className="divide-y divide-slate-100 text-xs">
                 {auditLogs.slice(0, 6).map((log) => (
-                  <div key={log.logId} className="py-2.5 flex flex-col sm:flex-row sm:justify-between gap-1">
+                  <div
+                    key={log.logId}
+                    className="py-2.5 flex flex-col sm:flex-row sm:justify-between gap-1"
+                  >
                     <div>
-                      <span className="font-mono font-semibold text-emerald-900">{log.action}</span>{' '}
+                      <span className="font-mono font-semibold text-[#15803D]">{log.action}</span>{' '}
                       <span className="text-slate-700">— {log.summary}</span>
                     </div>
                     <span className="font-mono text-slate-400 shrink-0">
@@ -282,159 +271,106 @@ export function SugAdminDashboard() {
           </div>
         )}
 
-        {tab === 'agents' && (
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-            <h2 className="text-lg font-display font-bold text-slate-900">
-              Agent Verification &amp; Disciplinary Control
-            </h2>
-            <div className="space-y-4">
-              {agents.map((ag) => (
-                <div
-                  key={ag.agentId}
-                  className="border border-slate-200 rounded-xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
-                >
-                  <div className="space-y-1 text-xs">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-bold text-slate-900">{ag.fullName}</span>
-                      <span className="font-mono text-slate-500">({ag.absuId})</span>
-                      <span
-                        className={`font-semibold ${
-                          ag.status === 'Approved'
-                            ? 'text-emerald-800'
-                            : ag.status === 'Pending Approval'
-                            ? 'text-amber-700'
-                            : 'text-rose-700'
-                        }`}
-                      >
-                        {ag.status}
-                      </span>
-                    </div>
-                    <p className="text-slate-600">
-                      {ag.email} · {ag.phone} · ID File: <span className="font-mono">{ag.idDocumentName}</span>
-                    </p>
-                    <p className="text-slate-600">
-                      Payout Bank: {ag.bankName} ({ag.accountNumber}) · Inspections: {ag.completedInspections} · Complaints: {ag.complaintsCount}
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => reviewAgentAsSug(ag.agentId, 'Approved')}
-                      className="px-3 py-1.5 text-xs font-semibold text-white bg-emerald-800 rounded-lg hover:bg-emerald-900"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => reviewAgentAsSug(ag.agentId, 'Rejected')}
-                      className="px-3 py-1.5 text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50"
-                    >
-                      Reject
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => reviewAgentAsSug(ag.agentId, 'Suspended')}
-                      className="px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg"
-                    >
-                      Suspend
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => reviewAgentAsSug(ag.agentId, 'Banned')}
-                      className="px-3 py-1.5 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-lg"
-                    >
-                      Ban
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
+        {/* LODGE APPROVAL QUEUE */}
         {tab === 'lodges' && (
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-            <h2 className="text-lg font-display font-bold text-slate-900">
-              Lodge Verification &amp; Availability Audit
-            </h2>
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+            <div>
+              <h2 className="text-lg font-display font-bold text-[#111827]">
+                Lodge Approval Queue
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Inspect photos, description, rent, agent fee, landlord &amp; caretaker contacts before approving. Rejection requires a mandatory reason.
+              </p>
+            </div>
             <div className="space-y-4">
               {properties.map((p) => (
                 <div
                   key={p.propertyId}
-                  className="border border-slate-200 rounded-xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                  className="border border-slate-200 rounded-2xl p-5 space-y-4"
                 >
-                  <div className="space-y-1 text-xs">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-bold text-slate-900">{p.title}</span>
-                      <span
-                        className={`font-semibold ${
-                          p.verificationStatus === 'SUG Verified'
-                            ? 'text-emerald-800'
-                            : p.verificationStatus === 'Pending Verification'
-                            ? 'text-amber-700'
-                            : 'text-rose-700'
-                        }`}
-                      >
-                        {p.verificationStatus}
-                      </span>
+                  <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                    <div className="space-y-2 text-xs flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-base font-bold text-[#111827]">{p.title}</span>
+                        <span
+                          className={`font-bold px-2.5 py-0.5 rounded-full ${
+                            p.lodgeStatus === 'Approved'
+                              ? 'bg-green-50 text-[#15803D]'
+                              : p.lodgeStatus === 'Rejected'
+                              ? 'bg-rose-50 text-rose-700'
+                              : 'bg-amber-50 text-amber-800'
+                          }`}
+                        >
+                          {p.lodgeStatus}
+                        </span>
+                      </div>
+                      <p className="text-slate-600">
+                        {p.locationArea} · {p.category} · Agent: <strong>{p.agentName}</strong> · Rooms: {p.availableRooms}
+                      </p>
+                      <p className="font-mono text-[#111827] tabular-nums">
+                        Annual Rent: {formatNairaFromKobo(p.yearlyRentKobo)} · Agent Fee:{' '}
+                        {formatNairaFromKobo(p.agentCommissionKobo)}
+                      </p>
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 grid sm:grid-cols-2 gap-2">
+                        <p>
+                          Landlord: <strong>{p.landlordName}</strong> ({p.landlordPhone})
+                        </p>
+                        <p>
+                          Caretaker: <strong>{p.caretakerName}</strong> ({p.caretakerPhone})
+                        </p>
+                      </div>
+                      <p className="text-slate-700 leading-relaxed">{p.description}</p>
+                      {p.flaggedSuspiciousReason && (
+                        <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-rose-900 flex items-center gap-2 font-semibold">
+                          <AlertTriangle className="w-4 h-4 shrink-0" />
+                          <span>Safety Flag: {p.flaggedSuspiciousReason}</span>
+                        </div>
+                      )}
+                      {p.rejectionReason && (
+                        <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-rose-900">
+                          <strong>Rejection Reason:</strong> {p.rejectionReason}
+                        </div>
+                      )}
+                      <div className="flex gap-2 overflow-x-auto pt-1">
+                        {p.media
+                          .filter((m) => m.type === 'image')
+                          .map((m) => (
+                            <img
+                              key={m.id}
+                              src={m.url}
+                              alt={m.caption}
+                              className="w-20 h-14 rounded-lg object-cover border border-slate-200 shrink-0"
+                            />
+                          ))}
+                      </div>
                     </div>
-                    <p className="text-slate-600">
-                      {p.locationArea} · {p.category} · Agent: {p.agentName} · Landlord: {p.landlordName} ({p.landlordAuthorizationDoc})
-                    </p>
-                    <p className="font-mono text-slate-700 tabular-nums">
-                      Rent: {formatNairaFromKobo(p.yearlyRentKobo)} · Commission:{' '}
-                      {formatNairaFromKobo(p.agentCommissionKobo)} · Rooms: {p.availableRooms} ({p.availabilityStatus})
-                    </p>
-                  </div>
 
-                  <div className="flex flex-wrap gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => reviewLodgeAsSug(p.propertyId, 'SUG Verified')}
-                      className="px-3 py-1.5 text-xs font-semibold text-white bg-emerald-800 rounded-lg hover:bg-emerald-900"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => reviewLodgeAsSug(p.propertyId, 'Rejected')}
-                      className="px-3 py-1.5 text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg"
-                    >
-                      Reject
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => reviewLodgeAsSug(p.propertyId, 'Suspended')}
-                      className="px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg"
-                    >
-                      Suspend
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => toggleLodgeAvailability(p.propertyId)}
-                      className="px-3 py-1.5 text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg"
-                    >
-                      Toggle Availability
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingProperty(p);
-                        setEditTitle(p.title);
-                        setEditRooms(String(p.availableRooms));
-                      }}
-                      className="px-3 py-1.5 text-xs font-semibold text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg"
-                    >
-                      Edit (Audited)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => reviewLodgeAsSug(p.propertyId, 'Removed')}
-                      className="px-3 py-1.5 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-lg"
-                    >
-                      Remove
-                    </button>
+                    <div className="flex flex-wrap gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => reviewLodgeAsSug(p.propertyId, 'Approved')}
+                        className="px-4 py-2.5 text-xs font-bold text-white bg-[#16A34A] hover:bg-[#15803D] rounded-xl"
+                      >
+                        Approve Lodge
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRejectTarget(p);
+                          setRejectionReason('');
+                        }}
+                        className="px-4 py-2.5 text-xs font-bold text-rose-800 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100"
+                      >
+                        Reject (With Reason)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleLodgeAvailability(p.propertyId)}
+                        className="px-3.5 py-2.5 text-xs font-semibold text-slate-700 border border-slate-200 rounded-xl hover:bg-slate-50"
+                      >
+                        {p.availabilityStatus === 'Available' ? 'Mark Taken' : 'Mark Available'}
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -442,239 +378,44 @@ export function SugAdminDashboard() {
           </div>
         )}
 
-        {tab === 'disputes' && (
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-            <h2 className="text-lg font-display font-bold text-slate-900">
-              SUG Dispute &amp; Refund Adjudication Centre
-            </h2>
-            {disputes.length === 0 ? (
-              <p className="text-sm text-slate-500">No disputes filed.</p>
-            ) : (
-              <div className="space-y-4">
-                {disputes.map((d) => {
-                  const linkedBooking = bookings.find((b) => b.bookingId === d.bookingId);
-                  const note = resolutionNotes[d.disputeId] || '';
-                  return (
-                    <div key={d.disputeId} className="border border-slate-200 rounded-xl p-5 space-y-3">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div>
-                          <p className="text-xs font-mono text-slate-500">
-                            Dispute {d.disputeId} · Booking {d.bookingReference} · Inspection {d.inspectionDate}
-                          </p>
-                          <h3 className="text-base font-bold text-slate-900">{d.propertyTitle}</h3>
-                        </div>
-                        <span className="text-xs font-semibold text-amber-800">{d.status}</span>
-                      </div>
-
-                      <div className="grid sm:grid-cols-4 gap-3 text-xs bg-slate-50 p-3 rounded-lg border border-slate-100">
-                        <div>
-                          <span className="text-slate-500">Student:</span> <strong>{d.studentName}</strong>
-                        </div>
-                        <div>
-                          <span className="text-slate-500">Agent:</span> <strong>{d.agentName}</strong>
-                        </div>
-                        <div>
-                          <span className="text-slate-500">Amount Paid:</span>{' '}
-                          <strong className="font-mono tabular-nums">
-                            {formatNairaFromKobo(d.amountPaidKobo)}
-                          </strong>
-                        </div>
-                        <div>
-                          <span className="text-slate-500">Booking State:</span>{' '}
-                          <strong>{linkedBooking?.status || 'Unknown'}</strong>
-                        </div>
-                      </div>
-
-                      <div className="text-sm space-y-1">
-                        <p className="font-semibold text-rose-900">Reason: {d.reason}</p>
-                        <p className="text-slate-700 text-xs leading-relaxed">{d.description}</p>
-                        {d.evidenceFileName && (
-                          <p className="text-xs font-mono text-slate-500">
-                            Evidence attached: {d.evidenceFileName}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="text-xs text-slate-500 space-y-1 border-t border-slate-100 pt-2">
-                        {d.history.map((h, i) => (
-                          <p key={i}>
-                            <span className="font-mono">{h.timestamp.slice(0, 16).replace('T', ' ')}</span> ·{' '}
-                            <strong>{h.actor}</strong>: {h.note}
-                          </p>
-                        ))}
-                      </div>
-
-                      <div className="space-y-2 pt-2 border-t border-slate-100">
-                        <input
-                          value={note}
-                          onChange={(e) =>
-                            setResolutionNotes((prev) => ({ ...prev, [d.disputeId]: e.target.value }))
-                          }
-                          placeholder="Enter recorded SUG decision note or reason..."
-                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg"
-                        />
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              resolveDisputeAsSug({
-                                disputeId: d.disputeId,
-                                action: 'approve_refund',
-                                note: note || 'Approved for full refund after SUG review.',
-                              })
-                            }
-                            className="px-3 py-1.5 text-xs font-semibold text-white bg-emerald-800 rounded-lg"
-                          >
-                            Approve Refund
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              resolveDisputeAsSug({
-                                disputeId: d.disputeId,
-                                action: 'reject_refund',
-                                note: note || 'Rejected after physical verification.',
-                              })
-                            }
-                            className="px-3 py-1.5 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-lg"
-                          >
-                            Reject Refund
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              resolveDisputeAsSug({
-                                disputeId: d.disputeId,
-                                action: 'request_evidence',
-                                note: note || 'Requested additional photo/video evidence from both parties.',
-                              })
-                            }
-                            className="px-3 py-1.5 text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg"
-                          >
-                            Request Additional Evidence
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              resolveDisputeAsSug({
-                                disputeId: d.disputeId,
-                                action: 'escalate',
-                                note: note || 'Escalated to SUG President Executive Council.',
-                              })
-                            }
-                            className="px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg"
-                          >
-                            Escalate Complaint
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              resolveDisputeAsSug({
-                                disputeId: d.disputeId,
-                                action: 'close',
-                                note: note || 'Dispute closed.',
-                              })
-                            }
-                            className="px-3 py-1.5 text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg"
-                          >
-                            Close Dispute
-                          </button>
-                          {linkedBooking?.status === 'Refund Approved' && (
-                            <button
-                              type="button"
-                              onClick={() => processApprovedRefund(linkedBooking.bookingId)}
-                              className="px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg"
-                            >
-                              Execute Approved Refund (Test Gateway)
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {tab === 'financials' && (
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-6">
+        {/* REALTIME BOOKINGS TABLE (READ-ONLY) & SUG 35% EARNINGS */}
+        {tab === 'bookings' && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h2 className="text-lg font-display font-bold text-slate-900">
-                  Transparent Financial Reconciliation Ledger
+                <h2 className="text-lg font-display font-bold text-[#111827]">
+                  Bookings &amp; SUG 35% Share Ledger
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Landlord yearly rent is isolated from platform commission revenue. All calculations use historical kobo snapshots.
+                  Read-only oversight of student bookings and SUG 35% share of Agent Fees. Refunded bookings yield ₦0.
                 </p>
               </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => downloadReport('csv')}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-emerald-800 text-white rounded-lg hover:bg-emerald-900"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download CSV</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => downloadReport('xls')}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border border-slate-200 text-slate-800 rounded-lg hover:bg-slate-50"
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
-                  <span>Download Excel</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={downloadSugReport}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold bg-[#16A34A] text-white rounded-xl hover:bg-[#15803D] self-start"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export CSV Report</span>
+              </button>
             </div>
 
-            <div className="grid sm:grid-cols-3 lg:grid-cols-4 gap-4 text-xs">
-              <div className="border border-slate-200 rounded-lg p-3.5">
-                <p className="text-slate-500">Landlord Rent (Isolated)</p>
-                <p className="text-base font-mono font-bold text-slate-900 tabular-nums mt-1">
-                  {formatNairaFromKobo(summary.totalLandlordRentKobo)}
-                </p>
-              </div>
-              <div className="border border-slate-200 rounded-lg p-3.5">
-                <p className="text-slate-500">Agent 45% Share</p>
-                <p className="text-base font-mono font-bold text-slate-900 tabular-nums mt-1">
-                  {formatNairaFromKobo(summary.totalAgentEarningsKobo)}
-                </p>
-              </div>
-              <div className="border border-emerald-200 bg-emerald-50/60 rounded-lg p-3.5">
-                <p className="text-emerald-900">SUG 70% of Platform (55%)</p>
-                <p className="text-base font-mono font-bold text-emerald-900 tabular-nums mt-1">
+            <div className="grid sm:grid-cols-3 gap-4 text-xs">
+              <div className="border border-green-200 bg-green-50/50 rounded-2xl p-4">
+                <p className="text-[#15803D] font-semibold">SUG 35% Total Revenue</p>
+                <p className="text-xl font-mono font-bold text-[#16A34A] tabular-nums mt-1">
                   {formatNairaFromKobo(summary.totalSugAllocationKobo)}
                 </p>
               </div>
-              <div className="border border-slate-200 rounded-lg p-3.5">
-                <p className="text-slate-500">Tech Manager 30% of Platform</p>
-                <p className="text-base font-mono font-bold text-slate-900 tabular-nums mt-1">
-                  {formatNairaFromKobo(summary.totalTechManagerAllocationKobo)}
+              <div className="border border-slate-200 rounded-2xl p-4">
+                <p className="text-slate-500">Held (48h Inspection Window)</p>
+                <p className="text-xl font-mono font-bold text-[#111827] tabular-nums mt-1">
+                  {formatNairaFromKobo(summary.pendingHoldVolumeKobo)}
                 </p>
               </div>
-              <div className="border border-slate-200 rounded-lg p-3.5">
-                <p className="text-slate-500">Inspection Fee Ledger (₦3k)</p>
-                <p className="text-base font-mono font-bold text-slate-900 tabular-nums mt-1">
-                  {formatNairaFromKobo(summary.totalInspectionFeeKobo)}
-                </p>
-              </div>
-              <div className="border border-slate-200 rounded-lg p-3.5">
-                <p className="text-slate-500">Est. Processing Fees</p>
-                <p className="text-base font-mono font-bold text-slate-900 tabular-nums mt-1">
-                  {formatNairaFromKobo(summary.processingFeesEstimateKobo)}
-                </p>
-              </div>
-              <div className="border border-slate-200 rounded-lg p-3.5">
-                <p className="text-slate-500">Refunds Issued</p>
-                <p className="text-base font-mono font-bold text-rose-800 tabular-nums mt-1">
-                  {formatNairaFromKobo(summary.totalRefundedKobo)}
-                </p>
-              </div>
-              <div className="border border-slate-200 rounded-lg p-3.5">
-                <p className="text-slate-500">Net Settled Volume</p>
-                <p className="text-base font-mono font-bold text-emerald-800 tabular-nums mt-1">
+              <div className="border border-slate-200 rounded-2xl p-4">
+                <p className="text-slate-500">Settled Volume</p>
+                <p className="text-xl font-mono font-bold text-[#15803D] tabular-nums mt-1">
                   {formatNairaFromKobo(summary.settledVolumeKobo)}
                 </p>
               </div>
@@ -685,41 +426,27 @@ export function SugAdminDashboard() {
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500">
                     <th className="py-2 pr-3">Reference</th>
+                    <th className="py-2 pr-3">Student</th>
+                    <th className="py-2 pr-3">Lodge</th>
                     <th className="py-2 pr-3">Status</th>
-                    <th className="py-2 pr-3 text-right">Landlord Rent</th>
-                    <th className="py-2 pr-3 text-right">Agent 45%</th>
-                    <th className="py-2 pr-3 text-right">Platform 55%</th>
-                    <th className="py-2 pr-3 text-right">SUG 70%</th>
-                    <th className="py-2 pr-3 text-right">Tech 30%</th>
-                    <th className="py-2 pr-3 text-right">Inspection</th>
-                    <th className="py-2 text-right">Total</th>
+                    <th className="py-2 pr-3 text-right">Booking Fee</th>
+                    <th className="py-2 text-right">SUG 35% Share</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-mono tabular-nums">
                   {bookings.map((bk) => (
                     <tr key={bk.bookingId}>
                       <td className="py-2.5 pr-3">{bk.bookingReference}</td>
+                      <td className="py-2.5 pr-3 font-sans">{bk.studentName}</td>
+                      <td className="py-2.5 pr-3 font-sans">{bk.propertyTitle}</td>
                       <td className="py-2.5 pr-3 font-sans">{bk.status}</td>
                       <td className="py-2.5 pr-3 text-right">
-                        {formatNairaFromKobo(bk.breakdown.landlordRentKobo)}
+                        {formatNairaFromKobo(bk.breakdown.totalBookingFeeKobo)}
                       </td>
-                      <td className="py-2.5 pr-3 text-right">
-                        {formatNairaFromKobo(bk.breakdown.agentEarningsKobo)}
-                      </td>
-                      <td className="py-2.5 pr-3 text-right">
-                        {formatNairaFromKobo(bk.breakdown.platformCommissionKobo)}
-                      </td>
-                      <td className="py-2.5 pr-3 text-right text-emerald-800 font-semibold">
-                        {formatNairaFromKobo(bk.breakdown.sugAllocationKobo)}
-                      </td>
-                      <td className="py-2.5 pr-3 text-right">
-                        {formatNairaFromKobo(bk.breakdown.techManagerAllocationKobo)}
-                      </td>
-                      <td className="py-2.5 pr-3 text-right">
-                        {formatNairaFromKobo(bk.breakdown.inspectionFeeKobo)}
-                      </td>
-                      <td className="py-2.5 text-right font-bold">
-                        {formatNairaFromKobo(bk.breakdown.totalPayableKobo)}
+                      <td className="py-2.5 text-right text-[#15803D] font-bold">
+                        {bk.status === 'Refunded'
+                          ? '₦0'
+                          : formatNairaFromKobo(bk.breakdown.sugAllocationKobo)}
                       </td>
                     </tr>
                   ))}
@@ -729,112 +456,112 @@ export function SugAdminDashboard() {
           </div>
         )}
 
-        {tab === 'governance' && (
-          <div className="grid lg:grid-cols-2 gap-6">
-            <form
-              onSubmit={handleSaveSettings}
-              className="bg-white border border-slate-200 rounded-xl p-6 space-y-4"
-            >
-              <h2 className="text-lg font-display font-bold text-slate-900">
-                Commission Sharing Policy Approval
+        {/* COMPLAINTS REVIEW (Recommendation Only — Paystack refund execution restricted to Super Admin) */}
+        {tab === 'disputes' && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+            <div>
+              <h2 className="text-lg font-display font-bold text-[#111827]">
+                Student Complaints &amp; Fraud Review
               </h2>
-              <p className="text-xs text-slate-600">
-                Changes apply to future bookings only; existing bookings retain their immutable historical allocation snapshots.
+              <p className="text-xs text-slate-500 mt-0.5">
+                Review student evidence and record SUG findings. Approved refunds are executed securely via Paystack by Super Admin.
               </p>
-              <div className="grid sm:grid-cols-2 gap-3 text-xs">
-                <div>
-                  <label className="block font-medium text-slate-700 mb-1">
-                    Platform Share % (Agent gets {100 - Number(platformPct)}%)
-                  </label>
-                  <input
-                    type="number"
-                    min={10}
-                    max={90}
-                    value={platformPct}
-                    onChange={(e) => setPlatformPct(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium text-slate-700 mb-1">
-                    SUG Share of Platform % (Tech gets {100 - Number(sugPct)}%)
-                  </label>
-                  <input
-                    type="number"
-                    min={10}
-                    max={90}
-                    value={sugPct}
-                    onChange={(e) => setSugPct(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium text-slate-700 mb-1">
-                    Max Agent Commission (% of Yearly Rent)
-                  </label>
-                  <input
-                    type="number"
-                    min={5}
-                    max={25}
-                    value={maxCommPct}
-                    onChange={(e) => setMaxCommPct(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium text-slate-700 mb-1">
-                    Fixed Inspection Fee
-                  </label>
-                  <input
-                    disabled
-                    value="₦3,000 (Fixed)"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-slate-100 font-mono"
-                  />
-                </div>
-              </div>
-              <button
-                type="submit"
-                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-800 rounded-lg hover:bg-emerald-900"
-              >
-                Approve Commission Policy
-              </button>
-            </form>
+            </div>
+            {disputes.length === 0 ? (
+              <p className="text-sm text-slate-500">No complaints filed.</p>
+            ) : (
+              <div className="space-y-4">
+                {disputes.map((d) => {
+                  const note = resolutionNotes[d.disputeId] || '';
+                  return (
+                    <div
+                      key={d.disputeId}
+                      className="border border-slate-200 rounded-2xl p-5 space-y-3"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-mono text-slate-500">
+                            {d.disputeId} · Booking {d.bookingReference} · Inspection {d.inspectionDate}
+                          </p>
+                          <h3 className="text-base font-bold text-[#111827]">{d.propertyTitle}</h3>
+                        </div>
+                        <span className="text-xs font-bold text-amber-800">{d.status}</span>
+                      </div>
 
-            <form
-              onSubmit={handlePublishAnnouncement}
-              className="bg-white border border-slate-200 rounded-xl p-6 space-y-4"
-            >
-              <h2 className="text-lg font-display font-bold text-slate-900 flex items-center gap-2">
-                <Megaphone className="w-4 h-4 text-emerald-800" />
-                <span>Publish SUG Student Announcement</span>
-              </h2>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Title</label>
-                <input
-                  required
-                  value={annTitle}
-                  onChange={(e) => setAnnTitle(e.target.value)}
-                  placeholder="e.g. Semester Hostel Verification Reminder"
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
-                />
+                      <div className="grid sm:grid-cols-3 gap-3 text-xs bg-slate-50 p-3 rounded-xl border border-slate-100">
+                        <div>
+                          <span className="text-slate-500">Student:</span> <strong>{d.studentName}</strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-500">Agent:</span> <strong>{d.agentName}</strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-500">Held Amount:</span>{' '}
+                          <strong className="font-mono">
+                            {formatNairaFromKobo(d.amountPaidKobo)}
+                          </strong>
+                        </div>
+                      </div>
+
+                      <p className="text-sm font-semibold text-rose-900">Reason: {d.reason}</p>
+                      <p className="text-xs text-slate-700 leading-relaxed">{d.description}</p>
+
+                      <div className="space-y-2 pt-2 border-t border-slate-100">
+                        <input
+                          value={note}
+                          onChange={(e) =>
+                            setResolutionNotes((prev) => ({ ...prev, [d.disputeId]: e.target.value }))
+                          }
+                          placeholder="Enter SUG investigation note..."
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl"
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              resolveDisputeAsSug({
+                                disputeId: d.disputeId,
+                                action: 'approve_refund',
+                                note: note || 'SUG Admin verified complaint and recommended full refund.',
+                              })
+                            }
+                            className="px-3.5 py-2 text-xs font-bold text-white bg-[#16A34A] hover:bg-[#15803D] rounded-xl"
+                          >
+                            Recommend Refund
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              resolveDisputeAsSug({
+                                disputeId: d.disputeId,
+                                action: 'reject_refund',
+                                note: note || 'Complaint rejected after inspection verification.',
+                              })
+                            }
+                            className="px-3.5 py-2 text-xs font-bold text-rose-800 bg-rose-50 border border-rose-200 rounded-xl"
+                          >
+                            Reject Claim
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              resolveDisputeAsSug({
+                                disputeId: d.disputeId,
+                                action: 'escalate',
+                                note: note || 'Escalated to Super Admin for Paystack action.',
+                              })
+                            }
+                            className="px-3.5 py-2 text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl"
+                          >
+                            Escalate to Super Admin
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Message</label>
-                <textarea
-                  required
-                  rows={3}
-                  value={annBody}
-                  onChange={(e) => setAnnBody(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
-                />
-              </div>
-              <button
-                type="submit"
-                className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800"
-              >
-                Publish Notice
-              </button>
-            </form>
+            )}
           </div>
         )}
 
@@ -851,53 +578,89 @@ export function SugAdminDashboard() {
             }}
           />
         )}
-      </div>
 
-      {/* Audited Property Edit Modal */}
-      {editingProperty && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+        {tab === 'announcements' && (
           <form
-            onSubmit={handleSavePropertyEdit}
-            className="bg-white rounded-xl max-w-md w-full p-6 space-y-4 border border-slate-200"
+            onSubmit={handlePublishAnnouncement}
+            className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4 max-w-2xl"
           >
-            <h3 className="text-lg font-display font-bold text-slate-900">
-              Edit Listing (Creates Immutable Audit Record)
-            </h3>
+            <h2 className="text-lg font-display font-bold text-[#111827] flex items-center gap-2">
+              <Megaphone className="w-4 h-4 text-[#16A34A]" />
+              <span>Publish SUG Student Safety Notice</span>
+            </h2>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Lodge Title</label>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Notice Title</label>
               <input
                 required
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                value={annTitle}
+                onChange={(e) => setAnnTitle(e.target.value)}
+                placeholder="e.g. Never Pay Rent to an Agent"
+                className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                Available Rooms
-              </label>
-              <input
-                type="number"
-                min={0}
+              <label className="block text-xs font-medium text-slate-700 mb-1">Message</label>
+              <textarea
                 required
-                value={editRooms}
-                onChange={(e) => setEditRooms(e.target.value)}
-                className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg"
+                rows={3}
+                value={annBody}
+                onChange={(e) => setAnnBody(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
+              />
+            </div>
+            <button
+              type="submit"
+              className="px-5 py-2.5 min-h-[48px] text-xs font-bold text-white bg-[#16A34A] hover:bg-[#15803D] rounded-xl"
+            >
+              Publish Notice
+            </button>
+          </form>
+        )}
+      </div>
+
+      {/* Mandatory Rejection Reason Modal */}
+      {rejectTarget && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <form
+            onSubmit={handleConfirmReject}
+            className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 border border-slate-200"
+          >
+            <div className="flex items-center gap-2 text-rose-700">
+              <XCircle className="w-5 h-5" />
+              <h3 className="text-lg font-display font-bold text-[#111827]">
+                Reject Lodge Listing
+              </h3>
+            </div>
+            <p className="text-xs text-slate-600">
+              Lodge: <strong>{rejectTarget.title}</strong>. A clear rejection reason is required so the agent can fix and resubmit.
+            </p>
+            <div>
+              <label htmlFor="sug-reject-reason" className="block text-xs font-medium text-slate-700 mb-1">
+                Mandatory Rejection Reason
+              </label>
+              <textarea
+                id="sug-reject-reason"
+                required
+                rows={3}
+                value={rejectionReason}
+                onChange={(e) => setRejectionReason(e.target.value)}
+                placeholder="e.g., Caretaker phone number unreachable; photos are blurry."
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
               />
             </div>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setEditingProperty(null)}
-                className="px-4 py-2 text-xs border border-slate-200 rounded-lg"
+                onClick={() => setRejectTarget(null)}
+                className="px-4 py-2.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-xl"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-800 rounded-lg"
+                className="px-4 py-2.5 text-xs font-bold text-white bg-rose-700 rounded-xl hover:bg-rose-800"
               >
-                Save Audited Edit
+                Confirm Rejection
               </button>
             </div>
           </form>

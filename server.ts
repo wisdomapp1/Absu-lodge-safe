@@ -4,24 +4,30 @@ import path from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import {
   calculateFinancialBreakdown,
+  computeSplitAtIso,
   DEFAULT_PLATFORM_SETTINGS,
   generateFinancialCsv,
   summarizeFinancialLedger,
 } from './src/domain/finance.ts';
 import { canTransitionBooking } from './src/domain/bookingMachine.ts';
-import { generateBookingReference, processIdempotentWebhook, validateInspectionContact } from './src/domain/validation.ts';
+import {
+  detectSuspiciousListingDescription,
+  generateBookingReference,
+  processIdempotentWebhook,
+  validateAllowedAgentFeeNaira,
+  validateInspectionContact,
+} from './src/domain/validation.ts';
 import type { BookingRecord, BookingStatus, PaymentEventLog, UserRole } from './src/domain/types.ts';
-import { SEED_BOOKINGS, SEED_PAYMENT_EVENTS } from './src/data/seedData.ts';
+import { SEED_BOOKINGS, SEED_PAYMENT_EVENTS, SEED_PROPERTIES } from './src/data/seedData.ts';
 
 const PORT = 3000;
+const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY || '';
 const TEST_WEBHOOK_SECRET = process.env.PAYSTACK_WEBHOOK_SECRET || 'absu_lodgesafe_test_webhook_secret';
 
-// Server-side in-memory store for API verification, idempotent webhook ledger, and reports
 const serverBookings: BookingRecord[] = [...SEED_BOOKINGS];
 const serverWebhookEvents: PaymentEventLog[] = [...SEED_PAYMENT_EVENTS];
 let bookingSeq = serverBookings.length + 1;
 
-// Simple sliding-window rate limiter per IP
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 function rateLimit(maxPerMinute: number) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -44,25 +50,30 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
 
-  // Health & system diagnostics (no secrets leaked)
   app.get('/api/health', (_req, res) => {
+    const supabaseUrl = process.env.SUPABASE_URL || 'https://jjidjcnyknoavmefrrpi.supabase.co';
     const supabaseServerConfigured = Boolean(
-      process.env.SUPABASE_URL &&
+      supabaseUrl &&
         process.env.SUPABASE_SERVICE_ROLE_KEY &&
-        !process.env.SUPABASE_URL.includes('YOUR_PROJECT_REF')
+        !process.env.SUPABASE_SERVICE_ROLE_KEY.includes('YOUR_')
+    );
+    const paystackConfigured = Boolean(PAYSTACK_SECRET && !PAYSTACK_SECRET.includes('YOUR_'));
+    const cloudinaryServerConfigured = Boolean(
+      process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET
     );
     res.json({
       status: 'ok',
       service: 'absu-lodgesafe-api',
-      databaseProvider: supabaseServerConfigured ? 'supabase' : 'ai-studio-managed',
+      supabaseProjectRef: 'jjidjcnyknoavmefrrpi',
       supabaseConfigured: supabaseServerConfigured,
-      paymentMode: DEFAULT_PLATFORM_SETTINGS.paymentMode,
-      paystackPartnerApproved: DEFAULT_PLATFORM_SETTINGS.paystackPartnerApproved,
+      paystackSecretConfigured: paystackConfigured,
+      cloudinaryServerConfigured,
+      paymentMode: paystackConfigured ? 'paystack_test' : DEFAULT_PLATFORM_SETTINGS.paymentMode,
       timestamp: new Date().toISOString(),
     });
   });
 
-  // Authoritative server-side kobo calculation
+  // Authoritative server-side kobo calculation (Agent Fee + ₦3,000 Inspection Fee ONLY; rent paid direct to landlord)
   app.post('/api/finance/calculate', rateLimit(120), (req, res) => {
     try {
       const yearlyRentKobo = Number(req.body?.yearlyRentKobo);
@@ -78,8 +89,26 @@ async function startServer() {
     }
   });
 
-  // Test-mode booking & payment initialization
-  app.post('/api/payments/initialize', rateLimit(30), (req, res) => {
+  // Server-side listing validation (blocks external payment links & invalid agent fees)
+  app.post('/api/listings/validate', rateLimit(60), (req, res) => {
+    const { description, agentFeeNaira } = req.body || {};
+    const feeCheck = validateAllowedAgentFeeNaira(Number(agentFeeNaira));
+    if (!feeCheck.valid) {
+      return res.status(400).json({ valid: false, error: feeCheck.error });
+    }
+    const safety = detectSuspiciousListingDescription(String(description || ''));
+    if (safety.flagged) {
+      return res.status(400).json({
+        valid: false,
+        flagged: true,
+        error: `Listing blocked by rent protection policy: ${safety.reason}. Rent must never be collected through links or agents.`,
+      });
+    }
+    return res.json({ valid: true });
+  });
+
+  // Initialize booking & Paystack payment (Paystack metadata included, rent NEVER collected)
+  app.post('/api/payments/initialize', rateLimit(30), async (req, res) => {
     try {
       const {
         propertyId,
@@ -88,16 +117,29 @@ async function startServer() {
         locationArea,
         studentUid,
         studentName,
+        studentPhone,
+        studentEmail,
         studentMatric,
         agentUid,
         agentName,
+        agentPhone,
         yearlyRentKobo,
         agentCommissionKobo,
         inspectionDate,
+        agreedPolicy,
       } = req.body || {};
 
+      if (!agreedPolicy) {
+        return res.status(400).json({ error: 'You must agree to the mandatory booking policy before payment.' });
+      }
       if (!propertyId || !studentUid || !agentUid || !inspectionDate) {
         return res.status(400).json({ error: 'Missing required booking initialization fields.' });
+      }
+
+      // Check lodge availability lock against double-booking
+      const prop = SEED_PROPERTIES.find((p) => p.propertyId === propertyId);
+      if (prop && prop.availabilityStatus === 'Unavailable') {
+        return res.status(409).json({ error: 'This lodge is currently unavailable for booking.' });
       }
 
       const breakdown = calculateFinancialBreakdown(
@@ -106,16 +148,19 @@ async function startServer() {
         DEFAULT_PLATFORM_SETTINGS
       );
       const bookingReference = generateBookingReference(bookingSeq++);
+      const bookingId = `bk_${crypto.randomUUID().slice(0, 8)}`;
       const now = new Date().toISOString();
 
       const newBooking: BookingRecord = {
-        bookingId: `bk_${crypto.randomUUID().slice(0, 8)}`,
+        bookingId,
         bookingReference,
         studentUid,
         studentName: studentName || 'ABSU Student',
-        studentMatric: studentMatric || 'Pending Matric',
+        studentPhone: studentPhone || '',
+        studentMatric: studentMatric || 'ABSU Student',
         agentUid,
         agentName: agentName || 'Verified Agent',
+        agentPhone: agentPhone || '',
         propertyId,
         propertyTitle: propertyTitle || 'ABSU Lodge',
         propertyCoverUrl: propertyCoverUrl || '',
@@ -123,31 +168,67 @@ async function startServer() {
         breakdown,
         status: 'Pending Payment',
         paymentStatus: 'Unpaid',
+        paymentHoldStatus: 'unpaid',
         inspectionStatus: 'Pending Schedule',
         inspectionDate,
+        paystackReference: bookingReference,
         createdAt: now,
         updatedAt: now,
       };
 
       serverBookings.unshift(newBooking);
 
-      res.status(201).json({
-        mode: 'test_disabled',
-        notice:
-          'Test Environment Only: Live transactions require written conditional-settlement approval from an authorized payment partner.',
+      const metadata = {
+        lodge_id: propertyId,
+        student_id: studentUid,
+        agent_id: agentUid,
+        agent_fee: breakdown.agentCommissionKobo,
+        inspection_fee: breakdown.inspectionFeeKobo,
+        booking_id: bookingId,
+      };
+
+      // If real Paystack secret key is configured, initialize directly with Paystack REST API
+      if (PAYSTACK_SECRET && !PAYSTACK_SECRET.includes('YOUR_') && studentEmail) {
+        const psRes = await fetch('https://api.paystack.co/transaction/initialize', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${PAYSTACK_SECRET}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            email: studentEmail,
+            amount: breakdown.totalPayableKobo,
+            reference: bookingReference,
+            metadata,
+          }),
+        });
+        const psData = await psRes.json();
+        if (psRes.ok && psData?.status) {
+          return res.status(201).json({
+            mode: 'paystack',
+            booking: newBooking,
+            amountKobo: breakdown.totalPayableKobo,
+            metadata,
+            accessCode: psData.data.access_code,
+            authorizationUrl: psData.data.authorization_url,
+          });
+        }
+      }
+
+      return res.status(201).json({
+        mode: 'paystack_test_simulation',
+        notice: 'Test Mode Active: Paystack transaction simulated because PAYSTACK_SECRET_KEY is not configured in server secrets.',
         booking: newBooking,
-        expectedTestSignature: crypto
-          .createHmac('sha256', TEST_WEBHOOK_SECRET)
-          .update(bookingReference)
-          .digest('hex'),
+        amountKobo: breakdown.totalPayableKobo,
+        metadata,
       });
     } catch (err: any) {
       res.status(400).json({ error: err?.message || 'Failed to initialize booking.' });
     }
   });
 
-  // Server-side payment verification (never trusts frontend success blindly)
-  app.post('/api/payments/verify', rateLimit(60), (req, res) => {
+  // Server-side payment verification (never trusts frontend success callback alone)
+  app.post('/api/payments/verify', rateLimit(60), async (req, res) => {
     const { bookingReference, outcome } = req.body || {};
     if (!bookingReference) {
       return res.status(400).json({ error: 'bookingReference is required.' });
@@ -158,10 +239,34 @@ async function startServer() {
       return res.status(404).json({ error: 'Booking reference not found on server.' });
     }
 
+    if (booking.paymentStatus === 'Held' || booking.paymentStatus === 'Test Paid') {
+      return res.json({ verified: true, duplicate: true, booking });
+    }
+
     const now = new Date().toISOString();
+
+    if (PAYSTACK_SECRET && !PAYSTACK_SECRET.includes('YOUR_') && outcome !== 'fail') {
+      try {
+        const psRes = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(bookingReference)}`, {
+          headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` },
+        });
+        const psData = await psRes.json();
+        if (!psRes.ok || !psData?.status || psData?.data?.status !== 'success') {
+          booking.status = 'Payment Failed';
+          booking.paymentStatus = 'Failed';
+          booking.paymentHoldStatus = 'failed';
+          booking.updatedAt = now;
+          return res.status(400).json({ verified: false, error: 'Paystack verification failed.', booking });
+        }
+      } catch (err: any) {
+        return res.status(502).json({ verified: false, error: err?.message || 'Paystack network check failed.' });
+      }
+    }
+
     if (outcome === 'fail') {
       booking.status = 'Payment Failed';
       booking.paymentStatus = 'Failed';
+      booking.paymentHoldStatus = 'failed';
       booking.updatedAt = now;
       serverWebhookEvents.unshift({
         eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
@@ -177,9 +282,13 @@ async function startServer() {
       return res.json({ verified: false, booking });
     }
 
+    const splitAt = computeSplitAtIso(now, 48);
     booking.status = 'Awaiting Inspection';
-    booking.paymentStatus = 'Test Paid';
+    booking.paymentStatus = 'Held';
+    booking.paymentHoldStatus = 'held';
     booking.inspectionStatus = 'Scheduled';
+    booking.paidAt = now;
+    booking.splitAt = splitAt;
     booking.updatedAt = now;
 
     const webhookId = `wh_ok_${bookingReference}`;
@@ -196,18 +305,18 @@ async function startServer() {
     return res.json({ verified: true, duplicate: result.duplicate, booking });
   });
 
-  // Idempotent webhook endpoint with HMAC/signature validation
   app.post('/api/webhooks/payment', rateLimit(120), (req, res) => {
-    const signatureHeader = String(req.headers['x-lodgesafe-signature'] || '');
+    const signatureHeader = String(req.headers['x-paystack-signature'] || req.headers['x-lodgesafe-signature'] || '');
     const { webhookId, bookingReference, eventType, amountKobo } = req.body || {};
 
     if (!webhookId || !bookingReference || !eventType) {
       return res.status(400).json({ error: 'Malformed webhook payload.' });
     }
 
+    const secret = PAYSTACK_SECRET || TEST_WEBHOOK_SECRET;
     const expectedSignature = crypto
-      .createHmac('sha256', TEST_WEBHOOK_SECRET)
-      .update(String(bookingReference))
+      .createHmac('sha512', secret)
+      .update(JSON.stringify(req.body))
       .digest('hex');
 
     const result = processIdempotentWebhook(serverWebhookEvents, {
@@ -231,7 +340,6 @@ async function startServer() {
     });
   });
 
-  // Server-side validated booking status transition
   app.post('/api/bookings/transition', rateLimit(60), (req, res) => {
     const { bookingReference, nextStatus, actorRole } = req.body || {};
     const booking = serverBookings.find((b) => b.bookingReference === bookingReference);
@@ -251,13 +359,13 @@ async function startServer() {
     res.json({ booking });
   });
 
-  // Save student inspection contact info after payment for the listing agent
   app.post('/api/bookings/inspection-contact', rateLimit(60), (req, res) => {
     const {
       bookingReference,
       fullName,
       phoneNumber,
       whatsappOrAltPhone,
+      preferredDate,
       preferredTimeSlot,
       campusMeetupPoint,
       notesForAgent,
@@ -269,6 +377,8 @@ async function startServer() {
     const check = validateInspectionContact({
       fullName: String(fullName || ''),
       phoneNumber: String(phoneNumber || ''),
+      whatsappOrAltPhone: String(whatsappOrAltPhone || ''),
+      preferredDate: preferredDate ? String(preferredDate) : undefined,
       preferredTimeSlot: String(preferredTimeSlot || ''),
       campusMeetupPoint: String(campusMeetupPoint || ''),
     });
@@ -285,12 +395,14 @@ async function startServer() {
     booking.inspectionContact = {
       fullName: String(fullName).trim(),
       phoneNumber: String(phoneNumber).trim(),
-      whatsappOrAltPhone: whatsappOrAltPhone ? String(whatsappOrAltPhone).trim() : undefined,
+      whatsappOrAltPhone: String(whatsappOrAltPhone || phoneNumber).trim(),
       preferredTimeSlot: String(preferredTimeSlot).trim(),
-      campusMeetupPoint: String(campusMeetupPoint).trim(),
+      campusMeetupPoint: String(campusMeetupPoint || 'Lodge Axis').trim(),
       notesForAgent: notesForAgent ? String(notesForAgent).trim() : undefined,
       submittedAt: now,
     };
+    if (preferredDate) booking.inspectionDate = String(preferredDate);
+    booking.inspectionTimeSlot = String(preferredTimeSlot).trim();
     booking.status = 'Inspection Scheduled';
     booking.inspectionStatus = 'Scheduled';
     booking.updatedAt = now;
@@ -298,7 +410,6 @@ async function startServer() {
     return res.json({ booking });
   });
 
-  // Dynamic ledger summary & downloadable CSV/Excel reports
   app.get('/api/reports/summary', (_req, res) => {
     res.json({
       summary: summarizeFinancialLedger(serverBookings),

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Menu, X } from 'lucide-react';
 import { ActivePage, useMarketplace } from '../context/MarketplaceContext';
+import { isSuperAdminRole } from '../domain/types';
 
 export function Navbar() {
   const { activePage, setActivePage, currentUser, setAuthModalOpen } = useMarketplace();
@@ -14,7 +15,7 @@ export function Navbar() {
     }
     if (currentUser.role === 'student') setActivePage('student-dashboard');
     else if (currentUser.role === 'agent') setActivePage('agent-dashboard');
-    else if (currentUser.role === 'tech_manager') setActivePage('tech-dashboard');
+    else if (isSuperAdminRole(currentUser.role)) setActivePage('tech-dashboard');
     else setActivePage('sug-dashboard');
   };
 
@@ -32,8 +33,8 @@ export function Navbar() {
 
   const accountLabel = (() => {
     if (!currentUser) return 'Sign In';
-    if (currentUser.role === 'sug_president') return 'SUG President';
-    if (currentUser.role === 'tech_manager') return 'Tech Manager';
+    if (isSuperAdminRole(currentUser.role)) return 'Super Admin';
+    if (currentUser.role === 'sug_admin' || currentUser.role === 'sug_president') return 'SUG Admin';
     return currentUser.fullName.split(' ')[0];
   })();
 
@@ -44,7 +45,7 @@ export function Navbar() {
         <button
           type="button"
           onClick={() => navigate('home')}
-          className="text-lg font-display font-bold tracking-tight text-emerald-900 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 rounded"
+          className="text-lg font-display font-bold tracking-tight text-[#16A34A] whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16A34A] rounded"
         >
           ABSU LodgeSafe
         </button>
@@ -54,8 +55,8 @@ export function Navbar() {
           <button
             type="button"
             onClick={() => navigate('home', 'lodges-catalog')}
-            className={`whitespace-nowrap shrink-0 transition-colors hover:text-emerald-900 ${
-              activePage === 'home' ? 'text-emerald-900 font-semibold' : ''
+            className={`whitespace-nowrap shrink-0 transition-colors hover:text-[#16A34A] ${
+              activePage === 'home' ? 'text-[#111827] font-semibold' : ''
             }`}
           >
             Browse Lodges
@@ -63,15 +64,15 @@ export function Navbar() {
           <button
             type="button"
             onClick={() => navigate('home', 'how-it-works')}
-            className="whitespace-nowrap shrink-0 transition-colors hover:text-emerald-900"
+            className="whitespace-nowrap shrink-0 transition-colors hover:text-[#16A34A]"
           >
             How It Works
           </button>
           <button
             type="button"
             onClick={() => navigate('policies')}
-            className={`whitespace-nowrap shrink-0 transition-colors hover:text-emerald-900 ${
-              activePage === 'policies' ? 'text-emerald-900 font-semibold' : ''
+            className={`whitespace-nowrap shrink-0 transition-colors hover:text-[#16A34A] ${
+              activePage === 'policies' ? 'text-[#111827] font-semibold' : ''
             }`}
           >
             Policies
@@ -79,8 +80,8 @@ export function Navbar() {
           <button
             type="button"
             onClick={goToDashboard}
-            className={`whitespace-nowrap shrink-0 transition-colors hover:text-emerald-900 ${
-              activePage.endsWith('dashboard') ? 'text-emerald-900 font-semibold' : ''
+            className={`whitespace-nowrap shrink-0 transition-colors hover:text-[#16A34A] ${
+              activePage.endsWith('dashboard') ? 'text-[#111827] font-semibold' : ''
             }`}
           >
             My Dashboard
@@ -92,7 +93,7 @@ export function Navbar() {
           <button
             type="button"
             onClick={() => setAuthModalOpen(true)}
-            className="px-4 py-2 text-xs font-semibold text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700"
+            className="px-4 py-2.5 text-xs font-semibold text-white bg-[#16A34A] rounded-xl hover:bg-[#15803D] transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16A34A]"
           >
             {accountLabel}
           </button>
@@ -114,28 +115,28 @@ export function Navbar() {
           <button
             type="button"
             onClick={() => navigate('home', 'lodges-catalog')}
-            className="block w-full text-left py-2 text-sm font-medium text-slate-700"
+            className="block w-full text-left py-2.5 text-sm font-medium text-slate-700"
           >
             Browse Lodges
           </button>
           <button
             type="button"
             onClick={() => navigate('home', 'how-it-works')}
-            className="block w-full text-left py-2 text-sm font-medium text-slate-700"
+            className="block w-full text-left py-2.5 text-sm font-medium text-slate-700"
           >
             How It Works
           </button>
           <button
             type="button"
             onClick={() => navigate('policies')}
-            className="block w-full text-left py-2 text-sm font-medium text-slate-700"
+            className="block w-full text-left py-2.5 text-sm font-medium text-slate-700"
           >
             Policies
           </button>
           <button
             type="button"
             onClick={goToDashboard}
-            className="block w-full text-left py-2 text-sm font-medium text-emerald-800 font-semibold"
+            className="block w-full text-left py-2.5 text-sm font-semibold text-[#16A34A]"
           >
             My Dashboard
           </button>

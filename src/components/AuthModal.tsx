@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
-import { LogOut, Shield, UserCheck, UserPlus, X } from 'lucide-react';
+import { LogOut, Phone, Shield, UserCheck, UserPlus, X } from 'lucide-react';
 import { useMarketplace } from '../context/MarketplaceContext';
+import { LocationArea } from '../domain/types';
+
+const OPERATING_AREAS: LocationArea[] = ['Uturu', 'School Gate', 'ABSU Gate', 'Okigwe Road'];
 
 export function AuthModal() {
   const {
@@ -10,6 +13,7 @@ export function AuthModal() {
     supabaseConfigured,
     signInWithGoogle,
     signInWithSupabaseEmail,
+    signInStudentWithPhonePassword,
     switchDemoRole,
     registerStudentAccount,
     registerAgentAccount,
@@ -17,23 +21,27 @@ export function AuthModal() {
   } = useMarketplace();
 
   const [tab, setTab] = useState<'signin' | 'student-reg' | 'agent-reg'>('signin');
+  const [loginMode, setLoginMode] = useState<'phone' | 'email'>('phone');
+  const [stuLoginPhone, setStuLoginPhone] = useState('');
+  const [stuLoginPass, setStuLoginPass] = useState('');
   const [sbEmail, setSbEmail] = useState('');
   const [sbPassword, setSbPassword] = useState('');
   const [sbError, setSbError] = useState<string | null>(null);
 
   // Student Registration Form
   const [stuName, setStuName] = useState('');
-  const [stuEmail, setStuEmail] = useState('');
   const [stuPhone, setStuPhone] = useState('');
+  const [stuWhatsapp, setStuWhatsapp] = useState('');
+  const [stuEmail, setStuEmail] = useState('');
   const [stuMatric, setStuMatric] = useState('');
-  const [stuDept, setStuDept] = useState('');
-  const [stuFaculty, setStuFaculty] = useState('');
 
   // Agent Registration Form
   const [agtName, setAgtName] = useState('');
   const [agtPhone, setAgtPhone] = useState('');
+  const [agtWhatsapp, setAgtWhatsapp] = useState('');
   const [agtEmail, setAgtEmail] = useState('');
-  const [agtAbsuId, setAgtAbsuId] = useState('');
+  const [agtNin, setAgtNin] = useState('');
+  const [agtArea, setAgtArea] = useState<LocationArea>('School Gate');
   const [agtDoc, setAgtDoc] = useState('NIN_Slip_Verification.pdf');
   const [agtBank, setAgtBank] = useState('');
   const [agtAcctNum, setAgtAcctNum] = useState('');
@@ -45,25 +53,26 @@ export function AuthModal() {
 
   const handleStudentSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!stuName || !stuEmail || !stuMatric) return;
+    if (!stuName || !stuPhone) return;
     registerStudentAccount({
       fullName: stuName,
-      email: stuEmail,
       phone: stuPhone,
-      matricNumber: stuMatric,
-      department: stuDept,
-      faculty: stuFaculty,
+      whatsappNumber: stuWhatsapp || stuPhone,
+      email: stuEmail || undefined,
+      matricNumber: stuMatric || undefined,
     });
   };
 
   const handleAgentSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!agtName || !agtEmail || !agtPhone || !agtBank || !agtAcctNum) return;
+    if (!agtName || !agtEmail || !agtPhone || !agtNin || !agtBank || !agtAcctNum) return;
     registerAgentAccount({
       fullName: agtName,
       phone: agtPhone,
+      whatsappNumber: agtWhatsapp || agtPhone,
       email: agtEmail,
-      absuId: agtAbsuId,
+      ninNumber: agtNin,
+      operatingArea: agtArea,
       idDocumentName: agtDoc,
       bankName: agtBank,
       accountNumber: agtAcctNum,
@@ -74,20 +83,20 @@ export function AuthModal() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-xl max-w-xl w-full border border-slate-200 overflow-hidden my-8">
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto text-[#111827]">
+      <div className="bg-white rounded-2xl max-w-xl w-full border border-slate-200 overflow-hidden my-8 shadow-xl">
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-emerald-800">ABSU LodgeSafe Access</p>
-            <h2 className="text-lg font-display font-bold text-slate-900">
-              Account & Role Workspace
+            <p className="text-xs font-semibold text-[#16A34A]">ABSU Lodge Access</p>
+            <h2 className="text-lg font-display font-bold text-[#111827]">
+              Sign In or Register Account
             </h2>
           </div>
           <button
             type="button"
             aria-label="Close authentication modal"
             onClick={() => setAuthModalOpen(false)}
-            className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
+            className="p-2 rounded-xl text-slate-500 hover:bg-slate-100"
           >
             <X className="w-5 h-5" />
           </button>
@@ -95,18 +104,18 @@ export function AuthModal() {
 
         <div className="p-6 space-y-5">
           {currentUser && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center justify-between gap-4">
+            <div className="bg-green-50 border border-green-200 rounded-2xl p-4 flex items-center justify-between gap-4">
               <div>
-                <p className="text-xs font-semibold text-emerald-900">
+                <p className="text-xs font-semibold text-[#15803D]">
                   Signed in as {currentUser.role.replace('_', ' ')}
                 </p>
-                <p className="text-sm font-bold text-slate-900">{currentUser.fullName}</p>
-                <p className="text-xs text-slate-600">{currentUser.email}</p>
+                <p className="text-sm font-bold text-[#111827]">{currentUser.fullName}</p>
+                <p className="text-xs text-slate-600">{currentUser.phone || currentUser.email}</p>
               </div>
               <button
                 type="button"
                 onClick={logoutUser}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-800 bg-white border border-rose-200 rounded-lg hover:bg-rose-50"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-rose-800 bg-white border border-rose-200 rounded-xl hover:bg-rose-50"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Log Out</span>
@@ -115,12 +124,12 @@ export function AuthModal() {
           )}
 
           {/* Segmented Mode Tabs */}
-          <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-lg text-xs font-medium">
+          <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-xl text-xs font-semibold">
             <button
               type="button"
               onClick={() => setTab('signin')}
-              className={`py-2 px-2 rounded-md transition-colors ${
-                tab === 'signin' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+              className={`py-2.5 px-2 rounded-lg transition-colors ${
+                tab === 'signin' ? 'bg-white text-[#111827] shadow-sm' : 'text-slate-600'
               }`}
             >
               Sign In / Demo Roles
@@ -128,8 +137,8 @@ export function AuthModal() {
             <button
               type="button"
               onClick={() => setTab('student-reg')}
-              className={`py-2 px-2 rounded-md transition-colors ${
-                tab === 'student-reg' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+              className={`py-2.5 px-2 rounded-lg transition-colors ${
+                tab === 'student-reg' ? 'bg-white text-[#111827] shadow-sm' : 'text-slate-600'
               }`}
             >
               Student Register
@@ -137,8 +146,8 @@ export function AuthModal() {
             <button
               type="button"
               onClick={() => setTab('agent-reg')}
-              className={`py-2 px-2 rounded-md transition-colors ${
-                tab === 'agent-reg' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+              className={`py-2.5 px-2 rounded-lg transition-colors ${
+                tab === 'agent-reg' ? 'bg-white text-[#111827] shadow-sm' : 'text-slate-600'
               }`}
             >
               Agent Apply
@@ -147,7 +156,83 @@ export function AuthModal() {
 
           {tab === 'signin' && (
             <div className="space-y-5">
-              {supabaseConfigured ? (
+              <div className="flex gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginMode('phone');
+                    setSbError(null);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg font-semibold ${
+                    loginMode === 'phone'
+                      ? 'bg-[#16A34A] text-white'
+                      : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  Student Phone + Password
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginMode('email');
+                    setSbError(null);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg font-semibold ${
+                    loginMode === 'email'
+                      ? 'bg-[#16A34A] text-white'
+                      : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  Admin / Agent Email Login
+                </button>
+              </div>
+
+              {loginMode === 'phone' ? (
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setSbError(null);
+                    const res = await signInStudentWithPhonePassword(stuLoginPhone, stuLoginPass);
+                    if (!res.ok) setSbError(res.error || 'Sign-in failed.');
+                  }}
+                  className="space-y-3"
+                >
+                  <div className="grid sm:grid-cols-2 gap-2.5">
+                    <input
+                      required
+                      value={stuLoginPhone}
+                      onChange={(e) => setStuLoginPhone(e.target.value)}
+                      placeholder="Phone (+234 80...)"
+                      className="px-3 py-2.5 text-sm font-mono border border-slate-200 rounded-xl"
+                    />
+                    <input
+                      type="password"
+                      required
+                      value={stuLoginPass}
+                      onChange={(e) => setStuLoginPass(e.target.value)}
+                      placeholder="Password"
+                      className="px-3 py-2.5 text-sm border border-slate-200 rounded-xl"
+                    />
+                  </div>
+                  {sbError && <p className="text-xs text-rose-700">{sbError}</p>}
+                  <div className="grid sm:grid-cols-2 gap-2.5">
+                    <button
+                      type="submit"
+                      className="min-h-[48px] inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-[#16A34A] hover:bg-[#15803D] text-white text-sm font-bold rounded-xl"
+                    >
+                      <Phone className="w-4 h-4" />
+                      <span>Sign In with Phone</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={signInWithGoogle}
+                      className="min-h-[48px] py-2.5 px-4 bg-[#111827] text-white text-sm font-bold rounded-xl hover:bg-slate-800"
+                    >
+                      Continue with Google
+                    </button>
+                  </div>
+                </form>
+              ) : (
                 <form
                   onSubmit={async (e) => {
                     e.preventDefault();
@@ -157,9 +242,6 @@ export function AuthModal() {
                   }}
                   className="space-y-3"
                 >
-                  <p className="text-xs font-semibold text-slate-700">
-                    Supabase Account Authentication
-                  </p>
                   <div className="grid sm:grid-cols-2 gap-2.5">
                     <input
                       type="email"
@@ -167,7 +249,7 @@ export function AuthModal() {
                       value={sbEmail}
                       onChange={(e) => setSbEmail(e.target.value)}
                       placeholder="Email address"
-                      className="px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                      className="px-3 py-2.5 text-sm border border-slate-200 rounded-xl"
                     />
                     <input
                       type="password"
@@ -175,53 +257,35 @@ export function AuthModal() {
                       value={sbPassword}
                       onChange={(e) => setSbPassword(e.target.value)}
                       placeholder="Password"
-                      className="px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                      className="px-3 py-2.5 text-sm border border-slate-200 rounded-xl"
                     />
                   </div>
                   {sbError && <p className="text-xs text-rose-700">{sbError}</p>}
                   <div className="grid sm:grid-cols-2 gap-2.5">
                     <button
                       type="submit"
-                      className="py-2.5 px-4 bg-emerald-800 text-white text-sm font-semibold rounded-lg hover:bg-emerald-900 transition-colors"
+                      className="min-h-[48px] py-2.5 px-4 bg-[#16A34A] hover:bg-[#15803D] text-white text-sm font-bold rounded-xl"
                     >
-                      Sign In with Supabase
+                      {supabaseConfigured ? 'Sign In with Supabase' : 'Sign In with Email'}
                     </button>
                     <button
                       type="button"
                       onClick={signInWithGoogle}
-                      className="py-2.5 px-4 bg-slate-900 text-white text-sm font-semibold rounded-lg hover:bg-slate-800 transition-colors"
+                      className="min-h-[48px] py-2.5 px-4 bg-[#111827] text-white text-sm font-bold rounded-xl hover:bg-slate-800"
                     >
                       Continue with Google
                     </button>
                   </div>
                 </form>
-              ) : (
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold text-slate-700">
-                    Google Sign-In &amp; Account Access
-                  </p>
-                  <button
-                    type="button"
-                    onClick={signInWithGoogle}
-                    className="w-full py-2.5 px-4 bg-slate-900 text-white text-sm font-semibold rounded-lg hover:bg-slate-800 transition-colors"
-                  >
-                    Continue with Google Sign-In
-                  </button>
-                  <p className="text-xs text-slate-500">
-                    To connect your own Supabase PostgreSQL &amp; Auth project, configure{' '}
-                    <span className="font-mono">VITE_SUPABASE_URL</span> and{' '}
-                    <span className="font-mono">VITE_SUPABASE_ANON_KEY</span> in AI Studio Secrets and apply the SQL schema.
-                  </p>
-                </div>
               )}
 
               <div className="border-t border-slate-200 pt-4 space-y-3">
                 <div>
-                  <p className="text-xs font-semibold text-emerald-900">
-                    Demonstration Role Sandbox (For SUG Evaluation & Testing)
+                  <p className="text-xs font-bold text-[#15803D]">
+                    Sandbox Role Switcher (ABSU Testing)
                   </p>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Select any role below to inspect its dedicated permissions and workflows using demonstration ABSU data.
+                    Preview Student, Verified Agent, SUG Admin, or Super Admin dashboards immediately.
                   </p>
                 </div>
 
@@ -229,56 +293,56 @@ export function AuthModal() {
                   <button
                     type="button"
                     onClick={() => switchDemoRole('student')}
-                    className="text-left p-3 border border-slate-200 rounded-lg hover:border-emerald-700 hover:bg-emerald-50/40 transition-colors"
+                    className="text-left p-3.5 border border-slate-200 rounded-xl hover:border-[#16A34A] hover:bg-green-50/40 transition-colors"
                   >
-                    <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                      <UserCheck className="w-3.5 h-3.5 text-emerald-800" />
+                    <p className="text-xs font-bold text-[#111827] flex items-center gap-1.5">
+                      <UserCheck className="w-3.5 h-3.5 text-[#16A34A]" />
                       <span>Student (Chinedu Okafor)</span>
                     </p>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Browse, book, confirm inspection, request refund
+                      Book lodges, boarding form, confirm/refund
                     </p>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => switchDemoRole('agent')}
-                    className="text-left p-3 border border-slate-200 rounded-lg hover:border-emerald-700 hover:bg-emerald-50/40 transition-colors"
+                    className="text-left p-3.5 border border-slate-200 rounded-xl hover:border-[#16A34A] hover:bg-green-50/40 transition-colors"
                   >
-                    <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                      <UserPlus className="w-3.5 h-3.5 text-emerald-800" />
+                    <p className="text-xs font-bold text-[#111827] flex items-center gap-1.5">
+                      <UserPlus className="w-3.5 h-3.5 text-[#16A34A]" />
                       <span>Verified Agent (Emeka Nwosu)</span>
                     </p>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Submit lodges, manage rooms, view 45% earnings
+                      My Lodges, Booking Alerts, 40% Earnings
                     </p>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => switchDemoRole('sug_president')}
-                    className="text-left p-3 border border-slate-200 rounded-lg hover:border-emerald-700 hover:bg-emerald-50/40 transition-colors"
+                    onClick={() => switchDemoRole('sug_admin')}
+                    className="text-left p-3.5 border border-slate-200 rounded-xl hover:border-[#16A34A] hover:bg-green-50/40 transition-colors"
                   >
-                    <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                      <Shield className="w-3.5 h-3.5 text-emerald-800" />
-                      <span>SUG President (Project Owner)</span>
+                    <p className="text-xs font-bold text-[#111827] flex items-center gap-1.5">
+                      <Shield className="w-3.5 h-3.5 text-[#16A34A]" />
+                      <span>SUG Admin (Comr. Kelechi)</span>
                     </p>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Verify agents/lodges, resolve disputes, CSV financials
+                      Approve/reject lodges, view 35% SUG earnings
                     </p>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => switchDemoRole('tech_manager')}
-                    className="text-left p-3 border border-slate-200 rounded-lg hover:border-emerald-700 hover:bg-emerald-50/40 transition-colors"
+                    onClick={() => switchDemoRole('super_admin')}
+                    className="text-left p-3.5 border border-slate-200 rounded-xl hover:border-[#16A34A] hover:bg-green-50/40 transition-colors"
                   >
-                    <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                      <Shield className="w-3.5 h-3.5 text-slate-700" />
-                      <span>Technical Manager (Admin)</span>
+                    <p className="text-xs font-bold text-[#111827] flex items-center gap-1.5">
+                      <Shield className="w-3.5 h-3.5 text-[#111827]" />
+                      <span>Super Admin (Engr. Somto)</span>
                     </p>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Webhooks, backups, audit logs, system health
+                      Agents KYC, 48h Splits, Refunds, Diagnostics
                     </p>
                   </button>
                 </div>
@@ -296,30 +360,7 @@ export function AuthModal() {
                     value={stuName}
                     onChange={(e) => setStuName(e.target.value)}
                     placeholder="e.g. Ngozi Eze"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    ABSU Matriculation No.
-                  </label>
-                  <input
-                    required
-                    value={stuMatric}
-                    onChange={(e) => setStuMatric(e.target.value)}
-                    placeholder="e.g. 2023/158210"
-                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Email</label>
-                  <input
-                    type="email"
-                    required
-                    value={stuEmail}
-                    onChange={(e) => setStuEmail(e.target.value)}
-                    placeholder="student@absu.edu.ng"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
                   />
                 </div>
                 <div>
@@ -329,33 +370,46 @@ export function AuthModal() {
                     value={stuPhone}
                     onChange={(e) => setStuPhone(e.target.value)}
                     placeholder="+234 80..."
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-xl"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Faculty</label>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">WhatsApp Number</label>
                   <input
                     required
-                    value={stuFaculty}
-                    onChange={(e) => setStuFaculty(e.target.value)}
-                    placeholder="e.g. Physical Sciences"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    value={stuWhatsapp}
+                    onChange={(e) => setStuWhatsapp(e.target.value)}
+                    placeholder="+234 80..."
+                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-xl"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Department</label>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Email (Optional)
+                  </label>
                   <input
-                    required
-                    value={stuDept}
-                    onChange={(e) => setStuDept(e.target.value)}
-                    placeholder="e.g. Computer Science"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    type="email"
+                    value={stuEmail}
+                    onChange={(e) => setStuEmail(e.target.value)}
+                    placeholder="student@absu.edu.ng"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    ABSU Matriculation No. (Optional)
+                  </label>
+                  <input
+                    value={stuMatric}
+                    onChange={(e) => setStuMatric(e.target.value)}
+                    placeholder="e.g. 2023/158210"
+                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-xl"
                   />
                 </div>
               </div>
               <button
                 type="submit"
-                className="w-full py-2.5 bg-emerald-800 text-white text-sm font-semibold rounded-lg hover:bg-emerald-900"
+                className="w-full min-h-[48px] py-3 bg-[#16A34A] hover:bg-[#15803D] text-white text-sm font-bold rounded-xl"
               >
                 Create Student Account
               </button>
@@ -365,7 +419,7 @@ export function AuthModal() {
           {tab === 'agent-reg' && (
             <form onSubmit={handleAgentSubmit} className="space-y-3">
               <p className="text-xs text-slate-600">
-                Agent applications enter <strong>Pending Approval</strong> status until reviewed and verified by SUG Accommodation Administrators.
+                Agent applications enter <strong>Pending Approval</strong> status until NIN &amp; payout bank details are verified by Super Admin.
               </p>
               <div className="grid sm:grid-cols-2 gap-3">
                 <div>
@@ -374,7 +428,7 @@ export function AuthModal() {
                     required
                     value={agtName}
                     onChange={(e) => setAgtName(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
                   />
                 </div>
                 <div>
@@ -383,7 +437,16 @@ export function AuthModal() {
                     required
                     value={agtPhone}
                     onChange={(e) => setAgtPhone(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-xl"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">WhatsApp Number</label>
+                  <input
+                    required
+                    value={agtWhatsapp}
+                    onChange={(e) => setAgtWhatsapp(e.target.value)}
+                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-xl"
                   />
                 </div>
                 <div>
@@ -393,16 +456,36 @@ export function AuthModal() {
                     required
                     value={agtEmail}
                     onChange={(e) => setAgtEmail(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">ABSU ID (Optional)</label>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    NIN Number (11 Digits)
+                  </label>
                   <input
-                    value={agtAbsuId}
-                    onChange={(e) => setAgtAbsuId(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    required
+                    value={agtNin}
+                    onChange={(e) => setAgtNin(e.target.value)}
+                    placeholder="11-digit NIN"
+                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-xl"
                   />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Operating Area
+                  </label>
+                  <select
+                    value={agtArea}
+                    onChange={(e) => setAgtArea(e.target.value as LocationArea)}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white"
+                  >
+                    {OPERATING_AREAS.map((area) => (
+                      <option key={area} value={area}>
+                        {area}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Bank Name</label>
@@ -411,7 +494,7 @@ export function AuthModal() {
                     value={agtBank}
                     onChange={(e) => setAgtBank(e.target.value)}
                     placeholder="e.g. Zenith Bank"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
                   />
                 </div>
                 <div>
@@ -421,7 +504,7 @@ export function AuthModal() {
                     value={agtAcctNum}
                     onChange={(e) => setAgtAcctNum(e.target.value)}
                     placeholder="10-digit NUBAN"
-                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-xl"
                   />
                 </div>
                 <div>
@@ -430,7 +513,7 @@ export function AuthModal() {
                     required
                     value={agtAcctName}
                     onChange={(e) => setAgtAcctName(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
                   />
                 </div>
                 <div>
@@ -441,23 +524,23 @@ export function AuthModal() {
                     required
                     value={agtEmergency}
                     onChange={(e) => setAgtEmergency(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    ID Document Reference
+                    ID Document Ref
                   </label>
                   <input
                     required
                     value={agtDoc}
                     onChange={(e) => setAgtDoc(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Years of Experience
+                    Experience (Years)
                   </label>
                   <input
                     type="number"
@@ -465,15 +548,15 @@ export function AuthModal() {
                     max={50}
                     value={agtYears}
                     onChange={(e) => setAgtYears(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl"
                   />
                 </div>
               </div>
               <button
                 type="submit"
-                className="w-full py-2.5 bg-emerald-800 text-white text-sm font-semibold rounded-lg hover:bg-emerald-900"
+                className="w-full min-h-[48px] py-3 bg-[#16A34A] hover:bg-[#15803D] text-white text-sm font-bold rounded-xl"
               >
-                Submit Agent Application (Pending Approval)
+                Submit Agent Application (Pending Super Admin Approval)
               </button>
             </form>
           )}
